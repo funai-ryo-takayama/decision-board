@@ -249,6 +249,7 @@ textarea:focus-visible, select:focus-visible, input:focus-visible, .md a:focus-v
       <div class="fg" role="group" aria-label="回答の状態で絞る"><span class="fl">状態</span><span class="fg" id="fState"></span></div>
       <div class="fg"><label class="fl" for="fArea">分野</label><select id="fArea"></select></div>
       <div class="fg"><label class="ck"><input type="checkbox" id="fHot">急ぎだけ</label></div>
+      <div class="fg"><label class="ck"><input type="checkbox" id="fQa">QA（テストの指摘）に関係するものだけ</label></div>
       <div class="fg search"><label class="fl" for="fText">文字で探す</label><input type="search" id="fText" placeholder="D-12、承認者 など"></div>
     </div>
     <p class="shown" id="shown"></p>
@@ -264,6 +265,8 @@ textarea:focus-visible, select:focus-visible, input:focus-visible, .md a:focus-v
 const CFG = (() => { let repo = ''; try { repo = decodeURIComponent(location.hash.slice(1)).trim(); } catch (e) {} if (!/^[A-Za-z0-9._-]{1,100}$/.test(repo)) repo = ''; try { if (repo) localStorage.setItem('board.repo', repo); else repo = localStorage.getItem('board.repo') || ''; } catch (e) {} return { title: '判断待ち', owner: 'funai-ryo-takayama', repo, key: 'board.' + repo, who: ['髙山', '先方'] }; })();
 const OWNER = CFG.owner, REPO = CFG.repo;
 const LABEL = '判断待ち', ANSWERED = '回答済み';
+// QA の絞り込み：テストの指摘そのもの（ラベル「テストの指摘」）と、指摘を閉じる・テストを進めるのに答えが要る判断待ち（ラベル「QA」。2026/10/23 髙山「QAのやつを優先的に対応したい」）
+const FB_LABEL = 'テストの指摘', QA_LABEL = 'QA';
 const API = 'https://api.github.com';
 const TOKEN_KEY = CFG.key + '.ghToken';
 const FILTER_KEY = CFG.key + '.filter';
@@ -486,7 +489,7 @@ function parseIssue(n) {
   const question = pre.question || s(n.title).replace(/^D-\d+\s*/, '');
   return {
     number: n.number, title: s(n.title), url: s(n.url), state, labels, who, area, priority,
-    fb: labels.includes('テストの指摘'), fbState: labels.find(l => FB_STATES.includes(l)) || '',
+    fb: labels.includes(FB_LABEL), qa: labels.includes(QA_LABEL), fbState: labels.find(l => FB_STATES.includes(l)) || '',
     key: km ? 'D-' + km[1] : '#' + n.number, related: s(t['関係する項目']),
     question, bg, opts: opts.list, optsIntro: opts.intro, hasOptSection: optText != null,
     canMark: opts.list.some(o => o.kind === 'check'),
@@ -578,10 +581,10 @@ const plainLen = (t) => s(t).replace(/[*`#|>-]/g, '').replace(/\s+/g, '').length
 // ---- 状態 ----
 let issues = [];
 let lastLoad = 0, loading = false;
-const f = { who: 'all', state: 'open', area: 'all', hot: false, text: '' };
+const f = { who: 'all', state: 'open', area: 'all', hot: false, qa: false, text: '' };
 try { Object.assign(f, JSON.parse(localStorage.getItem(FILTER_KEY) || '{}')); } catch (e) {}
 f.text = '';
-const saveF = () => { try { localStorage.setItem(FILTER_KEY, JSON.stringify({ who: f.who, state: f.state, area: f.area, hot: f.hot })); } catch (e) {} };
+const saveF = () => { try { localStorage.setItem(FILTER_KEY, JSON.stringify({ who: f.who, state: f.state, area: f.area, hot: f.hot, qa: f.qa })); } catch (e) {} };
 const drafts = new Map();    // 書きかけ（番号 → {choice, note}）。描き直しても消さない
 const editing = new Set();   // 回答済みを［回答を直す］で開いているもの
 const openBg = new Set(), openHist = new Set(), openCm = new Set();
@@ -781,7 +784,7 @@ function matchText(it) {
   // 「D-15」「#15」は番号ちょうどのものだけ（D-152 などに当たらないように）。ほかは本文・コメント・ラベルの中を探す
   return q.split(/\s+/).every(w => { const m = /^(?:d-|#)0*(\d+)$/.exec(w); return m ? it.number === +m[1] : it.hay.includes(w); });
 }
-const baseList = () => issues.filter(d => (f.area === 'all' || d.area === f.area) && (!f.hot || d.priority === '急ぎ') && matchText(d));
+const baseList = () => issues.filter(d => (f.area === 'all' || d.area === f.area) && (!f.hot || d.priority === '急ぎ') && (!f.qa || d.fb || d.qa) && matchText(d));
 const byWho = (arr, w) => arr.filter(d => w === 'all' || d.who === w);
 const whoList = () => ['髙山', '先方', ...[...new Set(issues.map(d => d.who).filter(w => w && w !== '髙山' && w !== '先方'))].sort()];
 const areaList = () => [...new Set(issues.map(d => d.area).filter(Boolean))].sort((a, b) => (AREAS.indexOf(a) + 1 || 99) - (AREAS.indexOf(b) + 1 || 99) || a.localeCompare(b, 'ja'));
@@ -799,6 +802,7 @@ function renderHead() {
   sel.replaceChildren(el('option', { value: 'all', text: 'すべての分野' }), ...areas.map(a => el('option', { value: a, text: a + '（' + issues.filter(d => d.area === a && d.state !== 'done').length + '）' })));
   sel.value = f.area;
   document.getElementById('fHot').checked = !!f.hot;
+  document.getElementById('fQa').checked = !!f.qa;
   const open = issues.filter(d => d.state === 'open');
   const cnt = document.getElementById('decCount');
   cnt.replaceChildren(
@@ -882,6 +886,7 @@ function dcard(it) {
     it.priority === '急ぎ' ? el('span', { class: 'tag hot', text: '急ぎ' }) : it.priority === '低' ? el('span', { class: 'tag', text: '低' }) : null,
     it.area ? el('span', { class: 'tag', text: it.area }) : null,
     it.fb ? el('span', { class: 'tag fb', text: 'テストの指摘' + (it.fbState ? '・' + it.fbState : '') }) : null,
+    it.qa && !it.fb ? el('span', { class: 'tag fb', text: 'QA の前提' }) : null,
     el('span', { class: 'key', text: it.key }),
     it.related ? el('span', { class: 'tag', text: '項目 ' + it.related }) : null,
     /^https:\/\/github\.com\//.test(it.url) ? el('a', { class: 'gh', href: it.url, target: '_blank', rel: 'noopener noreferrer', text: 'GitHub で開く' }) : null);
@@ -1077,6 +1082,7 @@ async function send(num, mode) {
 // ---- つなぐ ----
 document.getElementById('fArea').addEventListener('change', (e) => { f.area = e.target.value; keep.clear(); saveF(); render(); });
 document.getElementById('fHot').addEventListener('change', (e) => { f.hot = e.target.checked; keep.clear(); saveF(); render(); });
+document.getElementById('fQa').addEventListener('change', (e) => { f.qa = e.target.checked; keep.clear(); saveF(); render(); });
 let tTimer = 0;
 document.getElementById('fText').addEventListener('input', (e) => { clearTimeout(tTimer); tTimer = setTimeout(() => { f.text = e.target.value; render(); }, 150); });
 document.getElementById('btnReload').addEventListener('click', () => { keep.clear(); oks.clear(); reload(); });

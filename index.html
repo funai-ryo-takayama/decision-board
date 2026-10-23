@@ -1,0 +1,1127 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<title>判断待ち</title>
+<style>
+/* 判断待ちのボード（2026/10/22 髙山「その場で概要を確認して対応方針の返信ができる形で、ほかのペンディングしているものも一覧で見れたうえで」）。
+   見た目・文言は claude.ai の状況ボード（10/21 で更新をやめた）の「判断待ち」の節に合わせる。データは GitHub の Issue（ラベル「判断待ち」）。
+   外のファイルは読まない（file:// でダブルクリックして開く）。通信は api.github.com だけ */
+:root {
+  --bg: #f5f6f3;
+  --panel: #ffffff;
+  --fg: #1d2420;
+  --muted: #5f6a64;
+  --line: #dde2dc;
+  --accent: #a35a24;
+  --accent-soft: #f3e6da;
+  --prod: #1f7a4d;   --prod-bg: #ddf1e5;
+  --done: #3f6f5e;   --done-bg: #e3ece8;
+  --wip: #9a6400;    --wip-bg: #fbeccb;
+  --decide: #7a3fa0; --decide-bg: #efe2f6;
+  --client: #8a4b3a; --client-bg: #f4e1da;
+  --todo: #6b726e;   --todo-bg: #eaecea;
+  --on-decide: #ffffff;
+  --f-body: "BIZ UDPGothic", "Hiragino Sans", "Yu Gothic UI", "Meiryo", sans-serif;
+  --f-head: "BIZ UDPGothic", "Hiragino Sans", "Yu Gothic UI", "Meiryo", sans-serif;
+  --f-num: "IBM Plex Mono", ui-monospace, "Consolas", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #131714; --panel: #1b201d; --fg: #e4e9e5; --muted: #9aa59f; --line: #2e3631;
+    --accent: #d88a4f; --accent-soft: #3a2a1d;
+    --prod: #6fd29d; --prod-bg: #1b3a2a; --done: #9cc4b3; --done-bg: #22302a;
+    --wip: #f0b955; --wip-bg: #3a2e14;
+    --decide: #c99be6; --decide-bg: #33233f; --client: #e3a08c; --client-bg: #3a251e;
+    --todo: #a3aaa6; --todo-bg: #262b28;
+    --on-decide: #131714;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #131714; --panel: #1b201d; --fg: #e4e9e5; --muted: #9aa59f; --line: #2e3631;
+  --accent: #d88a4f; --accent-soft: #3a2a1d;
+  --prod: #6fd29d; --prod-bg: #1b3a2a; --done: #9cc4b3; --done-bg: #22302a;
+  --wip: #f0b955; --wip-bg: #3a2e14;
+  --decide: #c99be6; --decide-bg: #33233f; --client: #e3a08c; --client-bg: #3a251e;
+  --todo: #a3aaa6; --todo-bg: #262b28;
+  --on-decide: #131714;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--f-body); font-size: 14px; line-height: 1.6; }
+[hidden] { display: none !important; }
+a { color: var(--accent); }
+.wrap { max-width: 1240px; margin: 0 auto; padding-block: 20px 48px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 20px; }
+header { display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: flex-end; justify-content: space-between; border-bottom: 2px solid var(--accent); padding-bottom: 12px; }
+h1 { font-family: var(--f-head); font-size: 24px; margin: 0; text-wrap: balance; letter-spacing: .02em; }
+.sub { color: var(--muted); margin: 2px 0 0; }
+.hright { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; justify-content: flex-end; }
+.live { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--todo); flex: none; }
+.dot.on { background: var(--prod); box-shadow: 0 0 0 3px var(--prod-bg); }
+.dot.bad { background: var(--client); box-shadow: 0 0 0 3px var(--client-bg); }
+.hbtn { font: inherit; font-size: 12px; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 3px 12px; cursor: pointer; min-height: 28px; transition: border-color .2s ease, background-color .2s ease; }
+.hbtn:hover { border-color: var(--fg); }
+.hbtn:active { transform: scale(.98); }
+.hbtn:disabled { opacity: .6; cursor: not-allowed; }
+.hbtn.quiet { color: var(--muted); }
+
+/* トークンの設定 */
+.setup { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; display: grid; gap: 10px; max-width: 760px; }
+.setup h2 { font-family: var(--f-head); font-size: 17px; margin: 0; }
+.setup p { margin: 0; }
+.setup ol { margin: 0; padding-left: 1.4em; display: grid; gap: 6px; }
+.setup code, .md code { font-family: var(--f-num); font-size: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; overflow-wrap: anywhere; }
+.setup .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.setup input[type="password"] { font: inherit; font-family: var(--f-num); font-size: 13px; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; flex: 1 1 280px; min-width: 0; }
+.setup .note { font-size: 12px; color: var(--muted); }
+
+.err { margin: 0; font-size: 13px; color: var(--client); background: var(--client-bg); border-radius: 6px; padding: 6px 10px; white-space: pre-line; }
+.banner { margin: 0; }
+
+/* 判断待ちの節 */
+.dsec { display: grid; gap: 10px; background: var(--decide-bg); border-radius: 8px; padding: 14px; }
+.ghead { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; }
+.ghead h2 { font-family: var(--f-head); font-size: 17px; margin: 0; color: var(--decide); }
+.ghead .gsub { color: var(--muted); font-size: 12px; flex: 1 1 360px; }
+.gcount { font-family: var(--f-num); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.gcount b { color: var(--fg); font-weight: 700; }
+.dfilters { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
+.dfilters .fg { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.dfilters .fl { font-size: 11px; color: var(--muted); letter-spacing: .06em; }
+.dfilters select, .dfilters input[type="search"] { font: inherit; font-size: 12px; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; min-height: 28px; }
+.dfilters input[type="search"] { width: 14em; max-width: 100%; }
+.dfilters label.ck { font-size: 12px; display: inline-flex; gap: 4px; align-items: center; cursor: pointer; }
+.chip { font: inherit; font-size: 12px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); border-radius: 999px; padding: 3px 10px; cursor: pointer; display: inline-flex; gap: 6px; align-items: center; min-height: 28px; transition: border-color .2s ease, background-color .2s ease; }
+.chip:hover { border-color: var(--fg); }
+.chip .n { font-family: var(--f-num); font-variant-numeric: tabular-nums; color: var(--muted); }
+.chip[aria-pressed="true"] { border-color: var(--fg); background: var(--fg); color: var(--bg); }
+.chip[aria-pressed="true"] .n { color: var(--bg); }
+.shown { font-size: 12px; color: var(--muted); margin: 0; }
+.dlist { display: grid; gap: 10px; }
+.empty { color: var(--muted); padding: 18px 14px; margin: 0; background: var(--panel); border-radius: 6px; }
+.empty.loading { color: var(--fg); font-size: 15px; padding: 32px 16px; display: flex; gap: 10px; align-items: center; }
+.empty.loading::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--decide); flex: none; animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .25; } }
+
+/* カード */
+.dcard { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--decide); border-radius: 6px; padding: 12px 14px; display: grid; gap: 8px; min-width: 0; }
+.dcard.w-client { border-left-color: var(--client); }
+.dcard.st-answered { border-left-color: var(--wip); }
+.dcard.st-done { border-left-color: var(--done); }
+.dcard.st-done > :not(.dtop) { opacity: .9; }
+.dtop { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; font-size: 12px; }
+.pill { display: inline-block; font-size: 12px; font-weight: 700; padding: 1px 9px; border-radius: 999px; white-space: nowrap; }
+.s-done { color: var(--done); background: var(--done-bg); }
+.s-wip { color: var(--wip); background: var(--wip-bg); }
+.s-decide { color: var(--decide); background: var(--decide-bg); }
+.s-client { color: var(--client); background: var(--client-bg); }
+.s-todo { color: var(--todo); background: var(--todo-bg); }
+.key { font-family: var(--f-num); color: var(--muted); }
+.tag { border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; color: var(--muted); }
+.tag.hot { border-color: var(--client); color: var(--client); font-weight: 700; }
+.tag.fb { border-color: var(--accent); color: var(--accent); }
+.gh { margin-left: auto; font-size: 12px; color: var(--accent); white-space: nowrap; }
+.q { font-weight: 700; font-size: 15px; margin: 0; white-space: pre-line; overflow-wrap: anywhere; }
+.ctx { font-size: 13px; color: var(--muted); display: grid; gap: 4px; }
+.ctx.clamp { max-height: 6.6em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 60%, transparent); mask-image: linear-gradient(#000 60%, transparent); }
+.md { min-width: 0; }
+.md p { margin: 0; white-space: pre-line; overflow-wrap: anywhere; }
+.md p + p, .md p + ul, .md ul + p, .md p + ol, .md ol + p, .md .mdt + p, .md p + .mdt { margin-top: 4px; }
+.md ul, .md ol { margin: 0; padding-left: 1.3em; display: grid; gap: 2px; }
+.md li { white-space: pre-line; overflow-wrap: anywhere; }
+.md .mdh { font-weight: 700; color: var(--fg); }
+.md .sech { font-size: 11px; letter-spacing: .06em; color: var(--muted); margin-top: 6px; }
+.md pre { margin: 0; font-family: var(--f-num); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg); border-radius: 4px; padding: 6px 8px; }
+.mdt { overflow-x: auto; max-width: 100%; }
+.mdt table { border-collapse: collapse; font-size: 12px; }
+.mdt th, .mdt td { border-bottom: 1px solid var(--line); padding: 2px 8px 2px 0; text-align: left; vertical-align: top; }
+.more { justify-self: start; font: inherit; font-size: 12px; color: var(--accent); background: none; border: 0; padding: 2px 0; cursor: pointer; text-decoration: underline; min-height: 24px; }
+.more:hover { color: var(--fg); }
+.intro { margin: 0; font-size: 12px; color: var(--muted); white-space: pre-line; }
+.opts { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.opt { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 8px; align-items: start; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; transition: background-color .2s ease, border-color .2s ease; }
+.opt:hover { border-color: var(--muted); }
+.opt.rec { border-color: var(--decide); }
+.opt.picked { background: var(--accent-soft); border-color: var(--accent); }
+.opt.locked { cursor: default; }
+.opt input { margin: 3px 0 0; accent-color: var(--accent); }
+.opt .ol { font-weight: 700; font-size: 13px; overflow-wrap: anywhere; }
+.opt .rtag { font-size: 11px; font-weight: 700; color: var(--decide); margin-left: 6px; white-space: nowrap; }
+.opt .ptag { font-size: 11px; font-weight: 700; color: var(--accent); margin-left: 6px; white-space: nowrap; }
+.opt .od { grid-column: 2; font-size: 12px; color: var(--muted); white-space: pre-line; overflow-wrap: anywhere; }
+.why { margin: 0; font-size: 13px; overflow-wrap: anywhere; }
+.lbl { font-size: 11px; color: var(--muted); letter-spacing: .06em; margin-right: 6px; }
+.src { margin: 0; font-size: 11px; color: var(--muted); overflow-wrap: anywhere; white-space: pre-line; }
+.hist { display: grid; gap: 6px; }
+.cmlist { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.cmlist > li { border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 0 6px 6px 0; padding: 6px 10px; display: grid; gap: 2px; font-size: 13px; min-width: 0; }
+.cmlist > li.k-ans { border-left-color: var(--wip); background: var(--wip-bg); }
+.cmlist > li.k-res { border-left-color: var(--done); background: var(--done-bg); }
+.cmlist .meta { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; font-size: 11px; color: var(--muted); }
+.cmlist .meta b { font-size: 12px; color: var(--fg); }
+.cmlist .meta .t { font-family: var(--f-num); font-variant-numeric: tabular-nums; }
+.cmlist .cbody.clamp { max-height: 7.8em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 60%, transparent); mask-image: linear-gradient(#000 60%, transparent); }
+.cmlist .first { font-weight: 700; }
+textarea.memo { font: inherit; font-size: 13px; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; min-height: 56px; resize: vertical; width: 100%; }
+textarea.memo:disabled { opacity: .6; }
+.dacts { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.send { font: inherit; font-weight: 700; color: var(--on-decide); background: var(--decide); border: 0; border-radius: 6px; padding: 6px 16px; cursor: pointer; min-height: 32px; transition: filter .2s ease, transform .2s ease; }
+.send:hover { filter: brightness(.9); }
+.send:active { transform: scale(.98); }
+.send:disabled { opacity: .6; cursor: not-allowed; filter: none; transform: none; }
+.send2 { font: inherit; font-size: 13px; color: var(--decide); background: var(--panel); border: 1px solid var(--decide); border-radius: 6px; padding: 5px 12px; cursor: pointer; min-height: 32px; transition: background-color .2s ease; }
+.send2:hover { background: var(--decide-bg); }
+.send2:disabled { opacity: .6; cursor: not-allowed; }
+.link { font: inherit; font-size: 12px; color: var(--muted); background: none; border: 0; text-decoration: underline; cursor: pointer; padding: 2px; min-height: 24px; }
+.link:hover { color: var(--fg); }
+.hint { margin: 0; font-size: 12px; color: var(--muted); }
+.prog { margin: 0; font-size: 12px; color: var(--decide); font-weight: 700; }
+.ok { margin: 0; font-size: 13px; color: var(--prod); background: var(--prod-bg); border-radius: 6px; padding: 6px 10px; }
+.partial { margin: 0; font-size: 13px; background: var(--wip-bg); border-radius: 6px; padding: 6px 10px; display: grid; gap: 2px; }
+.partial .steps { font-weight: 700; }
+.foot { color: var(--muted); font-size: 12px; margin: 0; }
+.chip:focus-visible, .hbtn:focus-visible, .send:focus-visible, .send2:focus-visible, .link:focus-visible, .more:focus-visible, .gh:focus-visible,
+textarea:focus-visible, select:focus-visible, input:focus-visible, .md a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 560px) {
+  h1 { font-size: 20px; }
+  .dsec { padding: 10px; }
+  .dcard { padding: 10px 12px; }
+  .gh { margin-left: 0; }
+  .dfilters input[type="search"] { width: 100%; }
+  .dfilters .fg.search { flex: 1 1 100%; }
+}
+@media (pointer: coarse) {
+  .chip, .hbtn, .dfilters select, .dfilters input[type="search"] { min-height: 36px; }
+  .send, .send2 { min-height: 44px; }
+  .more, .link { min-height: 36px; }
+  .gh { min-height: 36px; display: inline-flex; align-items: center; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1 id="hTitle">判断待ち</h1>
+      <p class="sub">髙山・先方に決めてもらうこと。GitHub の Issue（ラベル「判断待ち」）を1件1枚で出します。</p>
+    </div>
+    <div class="hright">
+      <div class="live" role="status"><span class="dot" id="dot"></span><span id="liveText">準備中</span></div>
+      <button type="button" class="hbtn" id="btnReload" hidden>読み直す</button>
+      <button type="button" class="hbtn quiet" id="btnForget" hidden>トークンを消す</button>
+    </div>
+  </header>
+
+  <section class="setup" id="setup" hidden aria-labelledby="setupH">
+    <h2 id="setupH">GitHub のトークンを貼ってください</h2>
+    <p>このボードは、ブラウザから GitHub の Issue を直接読み書きします。初めの1回だけ、このリポジトリの Issue だけを読み書きできるトークンを作って、下に貼ってください。</p>
+    <ol>
+      <li>GitHub に funai-ryo-takayama でログインした状態で、<a id="tokNewLink" href="https://github.com/settings/personal-access-tokens/new?name=%E5%88%A4%E6%96%AD%E5%BE%85%E3%81%A1%E3%83%9C%E3%83%BC%E3%83%89&amp;target_name=funai-ryo-takayama&amp;expires_in=90&amp;issues=write" target="_blank" rel="noopener noreferrer">トークンの作成画面（github.com/settings/personal-access-tokens/new）</a>を開く。名前（判断待ちボードと今日の日付）・<b>Resource owner</b>（funai-ryo-takayama）・<b>Expiration</b>（90日）・<b>Permissions</b> の <b>Issues</b>（<b>Read and write</b>）が、はじめから入っています。</li>
+      <li><b>Repository access</b> で <b>Only select repositories</b> を選び、<code class="repoName"></code> だけを選ぶ（ここだけは自分で選びます）。</li>
+      <li>いちばん下の <b>Generate token</b> を押し、出てきた <code>github_pat_…</code> をコピーして、ここに貼る。</li>
+    </ol>
+    <p class="note">入っていないときは手で：Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token。Resource owner は <code>funai-ryo-takayama</code>、Permissions で Issues を Read and write（Metadata は自動で Read-only）。ほかの権限は付けない。期限が切れたら作り直して貼り直します。</p>
+    <div class="row">
+      <label for="tokIn" class="note">トークン</label>
+      <input type="password" id="tokIn" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="github_pat_…">
+      <button type="button" class="send" id="tokSave">保存して読む</button>
+    </div>
+    <p class="err" id="setupErr" role="alert" hidden></p>
+    <p class="note">トークンはこのブラウザの中（localStorage）にだけ置き、画面やファイルには出しません。消すときは右上の［トークンを消す］。GitHub 側で取り消すときは、同じ設定画面の Fine-grained tokens から Delete します。</p>
+  </section>
+
+  <p class="err banner" id="banner" role="alert" hidden></p>
+
+  <section class="dsec" id="decSec" aria-labelledby="decH" hidden>
+    <div class="ghead">
+      <h2 id="decH">判断待ち</h2>
+      <span class="gsub">選んで［回答する］を押すと、Issue の選択肢に印を付け、回答をコメントに書き、ラベル「回答済み」を付けます。Claude が読んで対応し、閉じると「対応済」になります。先方の答えも、ここに書いてください。</span>
+    </div>
+    <div class="gcount" id="decCount" hidden></div>
+    <div class="dfilters" id="decFilters" hidden>
+      <div class="fg" role="group" aria-label="誰の判断かで絞る"><span class="fl">誰の判断</span><span class="fg" id="fWho"></span></div>
+      <div class="fg" role="group" aria-label="回答の状態で絞る"><span class="fl">状態</span><span class="fg" id="fState"></span></div>
+      <div class="fg"><label class="fl" for="fArea">分野</label><select id="fArea"></select></div>
+      <div class="fg"><label class="ck"><input type="checkbox" id="fHot">急ぎだけ</label></div>
+      <div class="fg search"><label class="fl" for="fText">文字で探す</label><input type="search" id="fText" placeholder="D-12、承認者 など"></div>
+    </div>
+    <p class="shown" id="shown"></p>
+    <div class="dlist" id="decList"><p class="empty">判断待ちを読み込んでいます。</p></div>
+  </section>
+
+  <p class="foot">データは GitHub の <a id="footRepo" target="_blank" rel="noopener noreferrer"></a>。このページは開いた時と［読み直す］を押した時に読みます（ほかのタブから戻って5分以上たっていれば読み直します）。</p>
+</div>
+
+<script>
+'use strict';
+// この案件の設定。スマホ用の公開の写し（GitHub Pages）は tools/publish_board.py がこの1行だけを差し替え、リポジトリ名は URL の # のあとから読む（2026/10/23 髙山「名前を抜いて公開」）
+const CFG = (() => { let repo = ''; try { repo = decodeURIComponent(location.hash.slice(1)).trim(); } catch (e) {} if (!/^[A-Za-z0-9._-]{1,100}$/.test(repo)) repo = ''; try { if (repo) localStorage.setItem('board.repo', repo); else repo = localStorage.getItem('board.repo') || ''; } catch (e) {} return { title: '判断待ち', owner: 'funai-ryo-takayama', repo, key: 'board.' + repo, who: ['髙山', '先方'] }; })();
+const OWNER = CFG.owner, REPO = CFG.repo;
+const LABEL = '判断待ち', ANSWERED = '回答済み';
+const API = 'https://api.github.com';
+const TOKEN_KEY = CFG.key + '.ghToken';
+const FILTER_KEY = CFG.key + '.filter';
+const PEND_KEY = CFG.key + '.pend';   // 途中で止まった送信（段階・コメントの文・メモだけ。トークンは入れない）
+const AREAS = ['承認', '受注', '見積', '発注・買掛', '納品・売掛', '帳票', 'EDI', '品目', 'Analytics', 'テスト・資料', '共通', '在庫'];
+const WHO_KNOWN = CFG.who;
+const FB_STATES = ['未着手', '対応中', '一部反映済', '本番反映済', '合意済（対応なし）', '対応しない', '先方待ち'];
+const DSTATE = { open: '未回答', answered: '回答済み（対応待ち）', done: '対応済' };
+const PRI = { '急ぎ': 0, '通常': 1, '低': 2 };
+const ST_ORDER = { open: 0, answered: 1, done: 2 };
+
+// GraphQL：判断待ちを開いた・閉じたとも全部（100件ずつページを送る）。コメントは新しいほうから30件
+const FRAG = `
+fragment F on Issue {
+  number title url state body createdAt updatedAt closedAt
+  labels(first: 30) { nodes { name } }
+  comments(last: 30) { totalCount nodes { body createdAt url } }
+}`;
+const LIST_QUERY = `
+query($owner: String!, $name: String!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    issues(first: 100, after: $after, labels: ["判断待ち"], states: [OPEN, CLOSED], orderBy: {field: CREATED_AT, direction: ASC}) {
+      totalCount
+      pageInfo { hasNextPage endCursor }
+      nodes { ...F }
+    }
+  }
+}`;
+const ONE_QUERY = `
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) { issue(number: $number) { ...F } }
+}`;
+
+// ---- 小道具 ----
+const s = (v) => (typeof v === 'string' ? v : '');
+function el(tag, attrs, ...kids) {
+  const n = document.createElement(tag);
+  if (attrs) for (const [k, v] of Object.entries(attrs)) {
+    if (v == null || v === false) continue;
+    if (k === 'class') n.className = v; else if (k === 'text') n.textContent = v; else n.setAttribute(k, v === true ? '' : v);
+  }
+  for (const c of kids.flat(Infinity)) if (c != null && c !== false) n.append(c);
+  return n;
+}
+const p2 = (n) => String(n).padStart(2, '0');
+const fmtAt = (iso) => { const d = new Date(s(iso)); if (isNaN(d)) return s(iso); return `${d.getMonth() + 1}/${d.getDate()} ${p2(d.getHours())}:${p2(d.getMinutes())}`; };
+const nowStamp = () => { const d = new Date(); return `${d.getFullYear()}/${p2(d.getMonth() + 1)}/${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`; };
+const norm = (t) => s(t).replace(/\r\n?/g, '\n').trim();
+const nameNorm = (t) => s(t).replace(/\*\*/g, '').replace(/\s+/g, ' ').trim();
+const stripTags = (t) => s(t).replace(/<br\s*\/?>/gi, '\n').replace(/<\/?(?:sub|sup|details|summary|b|i|u|em|strong|code|kbd|p|div|span|a|img|hr|ul|ol|li|table|thead|tbody|tr|td|th|h[1-6]|picture|source)(?:\s[^>]*)?\/?>/gi, '');
+
+// ---- トークン（このブラウザの localStorage にだけ置く。画面・console・URL には出さない） ----
+let memToken = '';
+function getToken() { try { return localStorage.getItem(TOKEN_KEY) || memToken; } catch (e) { return memToken; } }
+function saveToken(t) { memToken = t; try { localStorage.setItem(TOKEN_KEY, t); return true; } catch (e) { return false; } }
+function forgetToken() { memToken = ''; try { localStorage.removeItem(TOKEN_KEY); } catch (e) {} }
+
+// ---- GitHub への通信 ----
+class GhErr extends Error { constructor(kind, msg, status) { super(msg); this.kind = kind; this.status = status || 0; } }
+function httpErr(res, data, write) {
+  const st = res.status, m = s(data && data.message);
+  if (st === 401) return new GhErr('auth', 'トークンが正しくないか、期限が切れています。GitHub でトークンを作り直して、貼り直してください。', st);
+  if ((st === 403 || st === 429) && (res.headers.get('x-ratelimit-remaining') === '0' || /rate limit/i.test(m))) return new GhErr('rate', 'GitHub の回数の上限に達しました。しばらく（長くて1時間）待ってから、もう一度押してください。', st);
+  if (st === 403) return new GhErr('perm', write
+    ? 'トークンの権限が足りず、書き込めませんでした。トークンの Permissions で Issues を「Read and write」にしてください（今は読み取りだけのようです）。'
+    : 'トークンの権限が足りず、読めませんでした。トークンの Permissions に Issues（Read and write）を足してください。', st);
+  if (st === 404) return new GhErr('repo', `${REPO} が見えません。トークンの Resource owner が ${OWNER} か、Repository access で ${REPO} を選んだかを確かめてください。`, st);
+  if (st === 410) return new GhErr('repo', 'このリポジトリでは Issue が使えない設定になっています。', st);
+  if (st === 422) return new GhErr('other', 'GitHub が受け付けませんでした（' + (m || st) + '）。', st);
+  if (st >= 500) return new GhErr('other', 'GitHub 側の一時的なエラーです（' + st + '）。少しおいて、もう一度押してください。', st);
+  return new GhErr('other', 'GitHub がエラーを返しました（' + st + (m ? '：' + m : '') + '）。', st);
+}
+async function call(method, url, body, write) {
+  const tok = getToken();
+  if (!tok) throw new GhErr('auth', 'トークンが入っていません。', 0);
+  const headers = { 'Authorization': 'Bearer ' + tok, 'Accept': 'application/vnd.github+json' };
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  let res;
+  try {
+    res = await fetch(url, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer' });
+  } catch (e) {
+    throw new GhErr('net', 'GitHub につながりませんでした（ネットが切れているか、応答が返ってきませんでした）。', 0);
+  }
+  let data = null;
+  try { data = await res.json(); } catch (e) { data = null; }
+  if (!res.ok) throw httpErr(res, data, write);
+  return data;
+}
+async function gql(query, variables) {
+  const data = await call('POST', API + '/graphql', { query, variables }, false);
+  if (data && Array.isArray(data.errors) && data.errors.length) {
+    const e = data.errors[0] || {}, m = s(e.message);
+    if (e.type === 'NOT_FOUND') throw new GhErr('repo', `${REPO} が見えません。トークンの Resource owner が ${OWNER} か、Repository access で ${REPO} を選んだかを確かめてください。`, 200);
+    if (e.type === 'FORBIDDEN' || /not accessible/i.test(m)) throw new GhErr('perm', 'トークンの権限が足りず、Issue を読めませんでした。トークンの Permissions に Issues（Read and write）を足してください。', 200);
+    if (e.type === 'RATE_LIMITED') throw new GhErr('rate', 'GitHub の回数の上限に達しました。しばらく（長くて1時間）待ってから、もう一度押してください。', 200);
+    throw new GhErr('other', 'GitHub がエラーを返しました（' + (m || '詳細なし') + '）。', 200);
+  }
+  if (!data || !data.data) throw new GhErr('other', 'GitHub の返事が読めませんでした。', 200);
+  return data.data;
+}
+const issueUrl = (n) => `${API}/repos/${OWNER}/${REPO}/issues/${n}`;
+
+// ---- 本文を読む ----
+// 節の区切りは「## 」の見出しだけ（# や ### は節の中のもの）。読む側（splitSections）と印を付ける側（setChecks）で同じ決まりにする
+const H2 = /^\s{0,3}##\s+(.+?)\s*#*\s*$/;
+// 選択肢の行の「名前」：太字なら **名前**、太字でなければ「 — 」の前（parseOptions と setChecks で同じ）
+function optName(rest) {
+  const b = /^\*\*(.+?)\*\*\s*(.*)$/.exec(rest);
+  if (b) return { name: b[1].trim(), desc: b[2] };
+  const d = rest.split(/\s+[—–]\s+/);
+  return { name: d[0].trim(), desc: d.slice(1).join(' — ') };
+}
+const CHECK_LINE = /^(\s*[-*+]\s+\[)([ xX])(\]\s+)(.*)$/;
+function splitSections(body) {
+  const lines = body.split('\n'), pre = [], list = [];
+  let cur = null;
+  for (const ln of lines) {
+    const h = H2.exec(ln);
+    if (h) { cur = { name: h[1].trim(), lines: [] }; list.push(cur); continue; }
+    (cur ? cur.lines : pre).push(ln);
+  }
+  return { pre: pre.join('\n'), list: list.map(x => ({ name: x.name, text: x.lines.join('\n').trim() })) };
+}
+function parsePre(pre) {
+  const lines = pre.split('\n');
+  const tbl = [], rest = [];
+  let q = [], qDone = false;
+  for (const ln of lines) {
+    if (/^\s*\|/.test(ln)) { tbl.push(ln); qDone = true; continue; }
+    if (!qDone) { if (!ln.trim()) { if (q.length) qDone = true; continue; } q.push(ln); continue; }
+    rest.push(ln);
+  }
+  const table = {};
+  const rows = tbl.map(l => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim())).filter(r => !r.every(c => /^:?-{2,}:?$/.test(c) || c === ''));
+  if (rows.length >= 2) rows[0].forEach((h, i) => { if (h) table[h] = s(rows[1][i]); });
+  return { question: q.join('\n').trim(), table, rest: rest.join('\n').trim() };
+}
+function parseOptions(text) {
+  const list = [], intro = [];
+  let cur = null;
+  for (const ln of text.split('\n')) {
+    let m, kind = null, mark = '', rest = '';
+    if ((m = CHECK_LINE.exec(ln))) { kind = 'check'; mark = m[2]; rest = m[4]; }
+    else if ((m = /^\s*\d+[.)]\s+(.*)$/.exec(ln))) { kind = 'num'; rest = m[1]; }
+    else if ((m = /^\s*[-*+]\s+(\*\*.+)$/.exec(ln))) { kind = 'bullet'; rest = m[1]; }
+    if (kind) {
+      let { name, desc } = optName(rest);
+      desc = desc.replace(/^[\s—–\-－:：]+/, '').trim();
+      cur = { name, desc, checked: /x/i.test(mark), kind };
+      list.push(cur);
+      continue;
+    }
+    if (cur && /^\s{2,}\S/.test(ln)) { cur.desc += (cur.desc ? '\n' : '') + ln.trim(); continue; }
+    if (ln.trim()) { cur = null; intro.push(ln.trim()); }
+  }
+  return { list, intro: intro.filter(t => !/チェックを入れて/.test(t)).join('\n') };
+}
+function parseComment(c) {
+  const raw = norm(c.body);
+  const claude = raw.includes('<!-- claude -->');
+  const text = stripTags(raw.replace(/<!--[\s\S]*?-->/g, '')).trim();
+  const m = /^\*\*([^*\n]+?)\*\*[ \t]*(?:（([^）\n]*)）)?[ \t]*(?:[：:]|[—–]\s)?[ \t]*/.exec(text);
+  let head = '', when = '', rest = text;
+  if (m) { head = m[1].trim(); when = s(m[2]).trim(); rest = text.slice(m[0].length); }
+  let kind = 'cmt';
+  if (/^回答/.test(head)) kind = 'ans';
+  else if (claude || (head && head !== 'コメント')) kind = 'res';
+  return { head, when, rest: rest.replace(/^\n+/, ''), kind, claude, createdAt: c.createdAt, url: c.url };
+}
+function parseIssue(n) {
+  const labels = ((n.labels && n.labels.nodes) || []).map(l => s(l.name));
+  const body = norm(n.body);
+  const notes = [];
+  const clean = body.replace(/<sub>([\s\S]*?)<\/sub>/gi, (_, t) => { notes.push(stripTags(t).trim()); return ''; }).replace(/<!--[\s\S]*?-->/g, '');
+  const secs = splitSections(clean);
+  const get = (re) => { const x = secs.list.find(v => re.test(v.name)); return x ? x.text : null; };
+  const pre = parsePre(secs.pre);
+  const optText = get(/^選択肢/);
+  const opts = optText != null ? parseOptions(optText) : { list: [], intro: '' };
+  const recText = get(/^推奨/);
+  let recName = '', reason = '';
+  if (recText != null) {
+    const ls = recText.split('\n');
+    const i0 = ls.findIndex(l => l.trim());
+    if (i0 >= 0) {
+      const first = ls[i0].trim().replace(/^[-*+]\s+/, '');
+      if (/^理由[：:]/.test(first)) reason = ls.slice(i0).join('\n').trim();
+      else { recName = nameNorm(first); reason = ls.slice(i0 + 1).join('\n').trim(); }
+    }
+    reason = reason.replace(/^理由[：:]\s*/, '');
+  }
+  let recIdx = opts.list.findIndex(o => nameNorm(o.name) === recName);
+  if (recIdx < 0 && recName.length >= 2) recIdx = opts.list.findIndex(o => recName.includes(nameNorm(o.name)) || nameNorm(o.name).includes(recName));
+  const bg = [];
+  if (pre.rest) bg.push({ title: '', text: pre.rest });
+  const bgText = get(/^背景/);
+  if (bgText) bg.push({ title: '', text: bgText });
+  secs.list.filter(v => !/^(背景|選択肢|推奨|出典)/.test(v.name) && v.text).forEach(v => bg.push({ title: v.name, text: v.text }));
+  if (!secs.list.length && !pre.question && !pre.rest && !body) bg.length = 0;
+  const comments = ((n.comments && n.comments.nodes) || []).map(parseComment);
+  const commentTotal = (n.comments && n.comments.totalCount) || comments.length;
+  // 選ばれた選択肢：本文の [x]。印の欄が無い本文（古い移したもの）は、最後の「回答」のコメントの選択肢の名前から読む
+  let picked = opts.list.map((o, i) => (o.checked ? i : -1)).filter(i => i >= 0);
+  let pickedFrom = picked.length ? 'body' : '';
+  if (!picked.length && opts.list.length && !opts.list.some(o => o.kind === 'check')) {
+    for (let k = comments.length - 1; k >= 0 && !picked.length; k--) {
+      const c = comments[k];
+      if (c.kind !== 'ans') continue;
+      const first = nameNorm(c.rest.split('\n')[0]);
+      const i = opts.list.findIndex(o => first && (first === nameNorm(o.name) || first.startsWith(nameNorm(o.name))));
+      if (i >= 0) { picked = [i]; pickedFrom = 'comment'; }
+    }
+  }
+  const state = n.state === 'CLOSED' ? 'done' : labels.includes(ANSWERED) ? 'answered' : 'open';
+  const t = pre.table;
+  const who = labels.find(l => WHO_KNOWN.includes(l) || (t['誰の判断'] && l === t['誰の判断'])) || s(t['誰の判断']) || '';
+  const area = labels.find(l => AREAS.includes(l) || (t['分野'] && l === t['分野'])) || s(t['分野']) || '';
+  const priority = labels.includes('急ぎ') ? '急ぎ' : labels.includes('低') ? '低' : (['急ぎ', '低'].includes(t['急ぎ度']) ? t['急ぎ度'] : '通常');
+  const km = /^D-(\d+)\s*/.exec(s(n.title));
+  const question = pre.question || s(n.title).replace(/^D-\d+\s*/, '');
+  return {
+    number: n.number, title: s(n.title), url: s(n.url), state, labels, who, area, priority,
+    fb: labels.includes('テストの指摘'), fbState: labels.find(l => FB_STATES.includes(l)) || '',
+    key: km ? 'D-' + km[1] : '#' + n.number, related: s(t['関係する項目']),
+    question, bg, opts: opts.list, optsIntro: opts.intro, hasOptSection: optText != null,
+    canMark: opts.list.some(o => o.kind === 'check'),
+    recIdx, recName, reason, source: s(get(/^出典/)), notes, comments, commentTotal, picked, pickedFrom,
+    createdAt: n.createdAt, updatedAt: n.updatedAt, closedAt: n.closedAt,
+    hay: (s(n.title) + '\n' + body + '\n' + comments.map(c => c.head + c.rest).join('\n') + '\n#' + n.number + ' ' + labels.join(' ')).toLowerCase(),
+  };
+}
+
+// 本文の「## 選択肢」の節（最初の1つ）の中だけ、選んだものを [x]、ほかを [ ] にする。変えるのは [ ] の中の1文字だけで、改行（\r\n）も含めて節の外は1文字も変えない。
+// 節の区切り・選択肢の行・名前の取り方は、カードに出すとき（splitSections・parseOptions）と同じ決まり（### の小見出しや太字でない選択肢も、出ているものには印が付く）
+function setChecks(body, choice) {
+  const parts = s(body).split(/(\r?\n)/);
+  let inSec = false, seen = false, found = false, boxes = 0, hasSection = false;
+  const want = nameNorm(choice);
+  for (let i = 0; i < parts.length; i += 2) {
+    const ln = parts[i];
+    const h = H2.exec(ln);
+    if (h) {
+      inSec = !seen && /^選択肢/.test(h[1].trim());
+      if (inSec) { hasSection = true; seen = true; }
+      continue;
+    }
+    if (!inSec) continue;
+    const m = CHECK_LINE.exec(ln);
+    if (!m) continue;
+    boxes++;
+    const hit = nameNorm(optName(m[4]).name) === want;
+    if (hit) found = true;
+    parts[i] = m[1] + (hit ? 'x' : ' ') + m[3] + m[4];
+  }
+  return { body: parts.join(''), found, boxes, hasSection };
+}
+
+// ---- Markdown を少しだけ（太字・コード・リンク・箇条書き・表）。HTML としては入れない ----
+function inl(text) {
+  const out = [];
+  const re = /(\*\*[^*\n]+?\*\*|`[^`\n]+`|\[[^\]\n]+\]\((https?:\/\/[^)\s]+)\)|https?:\/\/[^\s）)」』、。]+)/g;
+  let last = 0, m;
+  const t = s(text);
+  while ((m = re.exec(t))) {
+    if (m.index > last) out.push(t.slice(last, m.index));
+    const x = m[0];
+    if (x.startsWith('**')) out.push(el('b', { text: x.slice(2, -2) }));
+    else if (x.startsWith('`')) out.push(el('code', { text: x.slice(1, -1) }));
+    else if (x.startsWith('[')) out.push(el('a', { href: m[2], target: '_blank', rel: 'noopener noreferrer', text: x.slice(1, x.indexOf('](')) }));
+    else out.push(el('a', { href: x, target: '_blank', rel: 'noopener noreferrer', text: x }));
+    last = m.index + x.length;
+  }
+  if (last < t.length) out.push(t.slice(last));
+  return out;
+}
+function mdTable(rows) {
+  const cells = rows.map(l => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim()));
+  const body = cells.filter(r => !r.every(c => /^:?-{2,}:?$/.test(c) || c === ''));
+  if (!body.length) return null;
+  return el('div', { class: 'mdt' }, el('table', null,
+    el('thead', null, el('tr', null, body[0].map(c => el('th', null, inl(c))))),
+    el('tbody', null, body.slice(1).map(r => el('tr', null, r.map(c => el('td', null, inl(c))))))));
+}
+function md(text) {
+  const out = [], lines = norm(stripTags(text)).split('\n');
+  const li = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
+  let i = 0;
+  while (i < lines.length) {
+    const ln = lines[i];
+    if (!ln.trim()) { i++; continue; }
+    if (/^\s*\|/.test(ln)) { const rows = []; while (i < lines.length && /^\s*\|/.test(lines[i])) rows.push(lines[i++]); out.push(mdTable(rows)); continue; }
+    if (/^\s*```/.test(ln)) { const buf = []; i++; while (i < lines.length && !/^\s*```/.test(lines[i])) buf.push(lines[i++]); i++; out.push(el('pre', { text: buf.join('\n') })); continue; }
+    if (/^\s{0,3}#{1,6}\s+/.test(ln)) { out.push(el('p', { class: 'mdh' }, inl(ln.replace(/^\s{0,3}#{1,6}\s+/, '')))); i++; continue; }
+    if (li.test(ln)) {
+      const ordered = /^\s*\d/.test(ln), items = [];
+      while (i < lines.length && (li.test(lines[i]) || (items.length && /^\s{2,}\S/.test(lines[i])))) {
+        const m = li.exec(lines[i]);
+        if (m) items.push(m[3].replace(/^\[ \]\s/, '☐ ').replace(/^\[[xX]\]\s/, '☑ ')); else items[items.length - 1] += '\n' + lines[i].trim();
+        i++;
+      }
+      out.push(el(ordered ? 'ol' : 'ul', null, items.map(t => el('li', null, inl(t)))));
+      continue;
+    }
+    const buf = [];
+    while (i < lines.length && lines[i].trim() && !/^\s*\|/.test(lines[i]) && !li.test(lines[i]) && !/^\s{0,3}#{1,6}\s/.test(lines[i]) && !/^\s*```/.test(lines[i])) buf.push(lines[i++]);
+    out.push(el('p', null, inl(buf.join('\n'))));
+  }
+  return out.filter(Boolean);
+}
+const plainLen = (t) => s(t).replace(/[*`#|>-]/g, '').replace(/\s+/g, '').length;
+
+// ---- 状態 ----
+let issues = [];
+let lastLoad = 0, loading = false;
+const f = { who: 'all', state: 'open', area: 'all', hot: false, text: '' };
+try { Object.assign(f, JSON.parse(localStorage.getItem(FILTER_KEY) || '{}')); } catch (e) {}
+f.text = '';
+const saveF = () => { try { localStorage.setItem(FILTER_KEY, JSON.stringify({ who: f.who, state: f.state, area: f.area, hot: f.hot })); } catch (e) {} };
+const drafts = new Map();    // 書きかけ（番号 → {choice, note}）。描き直しても消さない
+const editing = new Set();   // 回答済みを［回答を直す］で開いているもの
+const openBg = new Set(), openHist = new Set(), openCm = new Set();
+const busy = new Map();      // 送っている途中（番号 → いまの段階）
+const pend = new Map();      // 途中で止まった送信（番号 → 済んだ段階）。［続きを送る］はまだのものだけ送る
+const errs = new Map();      // カードごとのエラー
+const oks = new Map();       // カードごとの「送りました」
+const keep = new Set();      // 答えた直後のものは、状態の絞り込みから外れても今の一覧に残す
+const commenting = new Set(); // 回答済みのカードで［コメントを書く］を開いているもの
+const stale = new Set();     // 書いている途中で一覧を描き直したため、古い中身のまま残しているカード（その欄を離れたら描き直す）
+let composing = false;       // 日本語の変換の途中（この間は描き直さない）
+let wantRender = false;
+
+// 途中で止まった送信は、ページを開き直しても［続きを送る］を出せるように、このブラウザに残す（トークンは入れない）
+function savePend() {
+  try {
+    if (!pend.size) { localStorage.removeItem(PEND_KEY); return; }
+    const o = {};
+    for (const [n, p] of pend) o[n] = { mode: p.mode, choice: p.choice, note: p.note, commentText: p.commentText, startedAt: p.startedAt, steps: p.steps, inflight: p.inflight, unsure: p.unsure };
+    localStorage.setItem(PEND_KEY, JSON.stringify(o));
+  } catch (e) {}
+}
+function loadPend() {
+  let o = {};
+  try { o = JSON.parse(localStorage.getItem(PEND_KEY) || '{}') || {}; } catch (e) { o = {}; }
+  for (const [k, v] of Object.entries(o)) {
+    const n = parseInt(k, 10);
+    if (!n || !v || typeof v.commentText !== 'string' || !['answer', 'fix', 'comment'].includes(v.mode)) continue;
+    const st = v.steps || {};
+    const steps = { body: ['done', 'none'].includes(st.body) ? st.body : '', comment: st.comment === 'done' ? 'done' : '', label: st.label === 'done' ? 'done' : '' };
+    // 閉じたときに送っていた途中かもしれないので、コメントがまだなら、先に GitHub を探してから送る（二重にしない）
+    pend.set(n, { mode: v.mode, choice: s(v.choice), note: s(v.note), commentText: v.commentText, startedAt: s(v.startedAt) || new Date(0).toISOString(), steps, tries: 0, inflight: '', unsure: steps.comment !== 'done', restored: true });
+  }
+}
+loadPend();
+
+function setLive(kind, text) {
+  const d = document.getElementById('dot');
+  d.classList.toggle('on', kind === 'on'); d.classList.toggle('bad', kind === 'bad');
+  document.getElementById('liveText').textContent = text;
+}
+function showBanner(msg) { const b = document.getElementById('banner'); b.hidden = !msg; b.textContent = msg || ''; }
+function showSetup(msg) {
+  document.getElementById('setup').hidden = false;
+  document.getElementById('decSec').hidden = true;
+  const e = document.getElementById('setupErr'); e.hidden = !msg; e.textContent = msg || '';
+  document.getElementById('btnReload').hidden = !getToken();
+  document.getElementById('btnForget').hidden = !getToken();
+  setLive(msg ? 'bad' : '', msg ? '読めませんでした' : 'トークン待ち');
+}
+function hideSetup() {
+  document.getElementById('setup').hidden = true;
+  document.getElementById('decSec').hidden = false;
+  document.getElementById('decCount').hidden = false;
+  document.getElementById('decFilters').hidden = false;
+  document.getElementById('btnReload').hidden = false;
+  document.getElementById('btnForget').hidden = false;
+}
+// 初めて読む間（まだ1件も無い）は、判断待ちの節に「読み込んでいます」を大きく出す
+function showLoading() {
+  document.getElementById('setup').hidden = true;
+  document.getElementById('decSec').hidden = false;
+  document.getElementById('decCount').hidden = true;
+  document.getElementById('decFilters').hidden = true;
+  document.getElementById('shown').textContent = '';
+  document.getElementById('decList').replaceChildren(el('p', { class: 'empty loading', role: 'status', text: 'GitHub から判断待ちを読み込んでいます…（本文とこれまでの書き込みをまとめて読むので、数秒かかることがあります）' }));
+}
+
+async function loadAll() {
+  const nodes = [];
+  let after = null, guard = 0;
+  do {
+    const d = await gql(LIST_QUERY + FRAG, { owner: OWNER, name: REPO, after });
+    if (!d.repository) throw new GhErr('repo', `${REPO} が見えません。`, 200);
+    const iss = d.repository.issues;
+    nodes.push(...iss.nodes);
+    after = iss.pageInfo && iss.pageInfo.hasNextPage ? iss.pageInfo.endCursor : null;
+  } while (after && ++guard < 30);
+  return nodes;
+}
+async function reload() {
+  if (loading) return;
+  if (!getToken()) { showSetup(''); return; }
+  loading = true;
+  setLive('', '読み込み中…');
+  if (!issues.length) showLoading();
+  document.getElementById('btnReload').disabled = true;
+  try {
+    const nodes = await loadAll();
+    issues = nodes.map(parseIssue);
+    lastLoad = Date.now();
+    // 途中で止まった送信のうち、もう判断待ちに無い・閉じられたものは捨てる。残るものは絞り込みに関係なく出す
+    for (const num of [...pend.keys()]) {
+      if (busy.has(num)) continue;
+      const it = issues.find(x => x.number === num);
+      if (!it || it.state === 'done') pend.delete(num); else keep.add(num);
+    }
+    savePend();
+    hideSetup(); showBanner('');
+    setLive('on', `${fmtAt(new Date().toISOString())} に読み込み（${issues.length}件）`);
+    render();
+  } catch (e) {
+    const err = e instanceof GhErr ? e : new GhErr('other', '読み込めませんでした。', 0);
+    if (err.kind === 'auth') { forgetToken(); showSetup(err.message + '\n（貼ってあったトークンは消しました）'); }
+    else if (err.kind === 'repo' || err.kind === 'perm') showSetup(err.message + '\nトークンの設定は GitHub の同じ画面で、作り直さずに直せます。直したら［読み直す］。');
+    else { setLive('bad', '読めませんでした'); showBanner(err.message + '\n［読み直す］を押してください。'); if (!issues.length) { document.getElementById('decSec').hidden = true; document.getElementById('btnReload').hidden = false; document.getElementById('btnForget').hidden = false; } }
+  } finally {
+    loading = false;
+    document.getElementById('btnReload').disabled = false;
+  }
+}
+async function refreshOne(num) {
+  const d = await gql(ONE_QUERY + FRAG, { owner: OWNER, name: REPO, number: num });
+  const n = d.repository && d.repository.issue;
+  const idx = issues.findIndex(x => x.number === num);
+  if (!n || !((n.labels && n.labels.nodes) || []).some(l => l.name === LABEL)) { if (idx >= 0) issues.splice(idx, 1); return; }
+  const it = parseIssue(n);
+  if (idx >= 0) issues[idx] = it; else issues.push(it);
+}
+
+// ---- 描く ----
+// 描き直しても、フォーカスと書いている欄のカーソルの位置を戻す（data-dkey で同じ欄を探す）
+function focusSnap() {
+  const a = document.activeElement;
+  if (!a || !a.dataset || !a.dataset.dkey) return null;
+  const snap = { key: a.dataset.dkey };
+  if (a.tagName === 'TEXTAREA') { snap.ss = a.selectionStart; snap.se = a.selectionEnd; snap.dir = a.selectionDirection; snap.top = a.scrollTop; }
+  return snap;
+}
+function focusRestore(root, snap) {
+  if (!snap) return;
+  const a = document.activeElement;
+  if (a && a !== document.body && a.isConnected) return;   // フォーカスがまだ残っている（描き直していない欄にある）
+  const t = root.querySelector(`[data-dkey="${CSS.escape(snap.key)}"]`);
+  if (!t || t.disabled || t.hidden) return;
+  t.focus({ preventScroll: true });
+  if (t.tagName === 'TEXTAREA' && snap.ss != null) { const n = t.value.length; t.setSelectionRange(Math.min(snap.ss, n), Math.min(snap.se, n), snap.dir || 'none'); t.scrollTop = snap.top || 0; }
+}
+// 文字を書いている途中のカード（メモの欄にフォーカスがある）
+function typingArticle() {
+  const a = document.activeElement;
+  return a && a.matches && a.matches('#decList textarea.memo') && !a.disabled ? a.closest('article.dcard') : null;
+}
+const sig = (it) => [it.state, it.updatedAt, it.commentTotal, it.labels.join(','), s(it.closedAt)].join('|');
+// 背景・書き込みを畳むかは、描いたあとに測って決める（文字数の目安は、測れないときの代わり）。隠れる文が無ければ畳まず、［続きを読む］も出さない
+function fitClamps(root) {
+  const boxes = [...root.querySelectorAll('[data-clamp]')];
+  if (!boxes.length) return;
+  boxes.forEach(b => b.classList.add('clamp'));
+  const fits = boxes.map(b => (b.clientHeight === 0 ? null : b.scrollHeight <= b.clientHeight + 1));
+  boxes.forEach((b, i) => {
+    const closed = b.dataset.clamp === 'closed';
+    const need = fits[i] === null ? b.dataset.guess === '1' : !fits[i];
+    b.classList.toggle('clamp', closed && need);
+    const btn = b.nextElementSibling;
+    if (btn && btn.classList.contains('more')) btn.hidden = !need;
+  });
+}
+let rzTimer = 0, lastW = window.innerWidth;
+window.addEventListener('resize', () => {
+  if (window.innerWidth === lastW) return;
+  lastW = window.innerWidth;
+  clearTimeout(rzTimer);
+  rzTimer = setTimeout(() => fitClamps(document.getElementById('decList')), 150);
+});
+// 1枚だけ描き直す（送っている間・［続きを読む］など）。ほかのカード（書きかけのメモ）には触らない
+function renderCard(num) {
+  const list = document.getElementById('decList');
+  const old = list.querySelector(`article.dcard[data-num="${num}"]`);
+  stale.delete(num);
+  if (!old) return;
+  const it = issues.find(x => x.number === num);
+  const snap = old.contains(document.activeElement) ? focusSnap() : null;
+  if (!it) { old.remove(); return; }
+  const neu = dcard(it);
+  old.replaceWith(neu);
+  fitClamps(neu);
+  focusRestore(neu, snap);
+}
+// 古い中身のまま残したカードは、フォーカスがそのカードを離れたら描き直す
+function flushStale() {
+  if (composing || !stale.size) return;
+  for (const num of [...stale]) {
+    const a = document.querySelector(`#decList article.dcard[data-num="${num}"]`);
+    if (a && a.contains(document.activeElement)) continue;
+    renderCard(num);
+  }
+}
+function chip(group, key, label, n, cur, on) {
+  const b = el('button', { class: 'chip', type: 'button', 'aria-pressed': String(cur === key), 'data-dkey': 'f:' + group + ':' + key }, label, n == null ? null : el('span', { class: 'n', text: String(n) }));
+  b.addEventListener('click', () => { on(key); keep.clear(); saveF(); render(); });
+  return b;
+}
+function matchText(it) {
+  const q = f.text.trim().toLowerCase();
+  if (!q) return true;
+  // 「D-15」「#15」は番号ちょうどのものだけ（D-152 などに当たらないように）。ほかは本文・コメント・ラベルの中を探す
+  return q.split(/\s+/).every(w => { const m = /^(?:d-|#)0*(\d+)$/.exec(w); return m ? it.number === +m[1] : it.hay.includes(w); });
+}
+const baseList = () => issues.filter(d => (f.area === 'all' || d.area === f.area) && (!f.hot || d.priority === '急ぎ') && matchText(d));
+const byWho = (arr, w) => arr.filter(d => w === 'all' || d.who === w);
+const whoList = () => ['髙山', '先方', ...[...new Set(issues.map(d => d.who).filter(w => w && w !== '髙山' && w !== '先方'))].sort()];
+const areaList = () => [...new Set(issues.map(d => d.area).filter(Boolean))].sort((a, b) => (AREAS.indexOf(a) + 1 || 99) - (AREAS.indexOf(b) + 1 || 99) || a.localeCompare(b, 'ja'));
+// 上の件数・絞り込みの札・「n 件を表示」だけを描き直す（一覧のカードには触らない）
+function renderHead() {
+  const snap = focusSnap();
+  const base = baseList();
+  const whos = whoList();
+  if (f.who !== 'all' && !whos.includes(f.who)) f.who = 'all';
+  document.getElementById('fWho').replaceChildren(...['all', ...whos].map(w => chip('who', w, w === 'all' ? 'すべて' : w, byWho(base, w).filter(d => f.state === 'all' || d.state === f.state).length, f.who, k => { f.who = k; })));
+  document.getElementById('fState').replaceChildren(...['open', 'answered', 'done', 'all'].map(st => chip('state', st, st === 'all' ? 'すべて' : DSTATE[st], byWho(base, f.who).filter(d => st === 'all' || d.state === st).length, f.state, k => { f.state = k; })));
+  const areas = areaList();
+  if (f.area !== 'all' && !areas.includes(f.area)) f.area = 'all';
+  const sel = document.getElementById('fArea');
+  sel.replaceChildren(el('option', { value: 'all', text: 'すべての分野' }), ...areas.map(a => el('option', { value: a, text: a + '（' + issues.filter(d => d.area === a && d.state !== 'done').length + '）' })));
+  sel.value = f.area;
+  document.getElementById('fHot').checked = !!f.hot;
+  const open = issues.filter(d => d.state === 'open');
+  const cnt = document.getElementById('decCount');
+  cnt.replaceChildren(
+    '未回答 ', el('b', { text: String(open.length) }), `（髙山 ${open.filter(d => d.who === '髙山').length}・先方 ${open.filter(d => d.who === '先方').length}${open.some(d => d.who !== '髙山' && d.who !== '先方') ? '・ほか ' + open.filter(d => d.who !== '髙山' && d.who !== '先方').length : ''}）／回答済み（対応待ち） `,
+    el('b', { text: String(issues.filter(d => d.state === 'answered').length) }), '／対応済 ', el('b', { text: String(issues.filter(d => d.state === 'done').length) }));
+  const n = document.querySelectorAll('#decList article.dcard').length;
+  document.getElementById('shown').textContent = issues.length ? `${n} 件を表示（未回答 → 回答済み → 対応済、その中は急ぎ → 通常 → 低の順）` : '';
+  focusRestore(document, snap);
+}
+// 一覧を全部描き直す（絞り込み・読み直し）。メモを書いている途中のカードは、要素ごとそのまま残す（カーソル・変換を切らない）
+function render() {
+  if (composing) { wantRender = true; return; }
+  wantRender = false;
+  const list = document.getElementById('decList');
+  const snap = focusSnap();
+  const typing = typingArticle();
+  const tnum = typing ? +typing.dataset.num : 0;
+  if (f.who !== 'all' && !whoList().includes(f.who)) f.who = 'all';
+  if (f.area !== 'all' && !areaList().includes(f.area)) f.area = 'all';
+  const shown = byWho(baseList(), f.who).filter(d => f.state === 'all' || d.state === f.state || keep.has(d.number)).sort((a, b) =>
+    (ST_ORDER[a.state] - ST_ORDER[b.state]) ||
+    ((PRI[a.priority] ?? 1) - (PRI[b.priority] ?? 1)) ||
+    ((a.who === '髙山' ? 0 : a.who === '先方' ? 1 : 2) - (b.who === '髙山' ? 0 : b.who === '先方' ? 1 : 2)) ||
+    (a.state === 'done' ? s(b.closedAt).localeCompare(s(a.closedAt)) : 0) ||
+    (a.number - b.number));
+  let nodes;
+  if (!issues.length) nodes = [el('p', { class: 'empty', text: '判断待ちはありません。' })];
+  else {
+    nodes = shown.map(it => {
+      if (it.number !== tnum) return dcard(it);
+      if (typing.dataset.sig !== sig(it)) stale.add(tnum);
+      return typing;
+    });
+    if (typing && !nodes.includes(typing)) {
+      // 書いている途中のカードが条件から外れた（ほかで閉じられた など）：離れるまでは元の位置に残す
+      const oldIdx = [...list.querySelectorAll('article.dcard')].indexOf(typing);
+      nodes.splice(Math.max(0, Math.min(oldIdx, nodes.length)), 0, typing);
+      stale.add(tnum);
+    }
+    if (!nodes.length) nodes = [el('p', { class: 'empty', text: 'この条件の判断待ちはありません。' })];
+  }
+  if (typing && typing.parentNode === list && nodes.includes(typing)) {
+    for (const c of [...list.childNodes]) if (c !== typing) c.remove();
+    const i = nodes.indexOf(typing);
+    typing.before(...nodes.slice(0, i));
+    typing.after(...nodes.slice(i + 1));
+  } else {
+    list.replaceChildren(...nodes);
+  }
+  fitClamps(list);
+  renderHead();
+  focusRestore(document, snap);
+}
+function clampBlock(kids, isOpen, onToggle, cls, guess, key) {
+  const box = el('div', { class: cls + ' md' + (guess && !isOpen ? ' clamp' : ''), 'data-clamp': isOpen ? 'open' : 'closed', 'data-guess': guess ? '1' : '0' }, kids);
+  const b = el('button', { class: 'more', type: 'button', 'aria-expanded': String(isOpen), text: isOpen ? 'たたむ' : '続きを読む', 'data-dkey': key, hidden: !guess });
+  b.addEventListener('click', onToggle);
+  return [box, b];
+}
+function toggleIn(set, key, num) { if (set.has(key)) set.delete(key); else set.add(key); renderCard(num); }
+function cmItem(c, it, idx) {
+  const label = c.head || (c.kind === 'cmt' ? 'コメント' : '書き込み');
+  const ck = it.number + ':' + idx;
+  const long = plainLen(c.rest) > 260 || c.rest.split('\n').length > 6;
+  const kids = md(c.rest);
+  return el('li', { class: 'k-' + c.kind },
+    el('div', { class: 'meta' }, el('b', { text: label }), el('span', { class: 't', text: c.when || fmtAt(c.createdAt), title: 'GitHub に書き込まれた日時 ' + fmtAt(c.createdAt) })),
+    c.rest ? clampBlock(kids, openCm.has(ck), () => toggleIn(openCm, ck, it.number), 'cbody', long, it.number + ':cm' + idx) : null);
+}
+function dcard(it) {
+  const st = it.state, num = it.number;
+  const isBusy = busy.has(num), p = pend.get(num);
+  const formOpen = st === 'open' || (st === 'answered' && editing.has(num));
+  const cmtOnly = st === 'answered' && !editing.has(num) && commenting.has(num) && !p;   // 回答済みに、選択肢は変えずにコメントだけ足す
+  const locked = isBusy || !!p;
+  const curChoice = it.picked.length ? it.opts[it.picked[0]].name : '';
+  const dr = drafts.get(num) || { choice: curChoice, note: '' };
+  const top = el('div', { class: 'dtop' },
+    el('span', { class: 'pill ' + (it.who === '先方' ? 's-client' : it.who === '髙山' ? 's-decide' : 's-todo'), text: it.who || '誰の判断：未設定' }),
+    el('span', { class: 'pill ' + (st === 'done' ? 's-done' : st === 'answered' ? 's-wip' : 's-todo'), text: DSTATE[st] }),
+    it.priority === '急ぎ' ? el('span', { class: 'tag hot', text: '急ぎ' }) : it.priority === '低' ? el('span', { class: 'tag', text: '低' }) : null,
+    it.area ? el('span', { class: 'tag', text: it.area }) : null,
+    it.fb ? el('span', { class: 'tag fb', text: 'テストの指摘' + (it.fbState ? '・' + it.fbState : '') }) : null,
+    el('span', { class: 'key', text: it.key }),
+    it.related ? el('span', { class: 'tag', text: '項目 ' + it.related }) : null,
+    /^https:\/\/github\.com\//.test(it.url) ? el('a', { class: 'gh', href: it.url, target: '_blank', rel: 'noopener noreferrer', text: 'GitHub で開く' }) : null);
+  const parts = [top, el('p', { class: 'q', text: it.question })];
+  // 背景（畳むかどうかは描いたあとに測る。文字数の目安は測れないときの代わり）
+  if (it.bg.length) {
+    const kids = it.bg.flatMap(b => [b.title ? el('p', { class: 'sech', text: b.title }) : null, ...md(b.text)]);
+    const total = it.bg.reduce((a, b) => a + plainLen(b.text), 0), lines = it.bg.reduce((a, b) => a + b.text.split('\n').filter(x => x.trim()).length, 0);
+    parts.push(...clampBlock(kids, openBg.has(num), () => toggleIn(openBg, num, num), 'ctx', total > 170 || lines > 3, num + ':bg'));
+  }
+  // 選択肢
+  if (it.optsIntro) parts.push(el('p', { class: 'intro', text: it.optsIntro }));
+  if (it.opts.length) {
+    const name = 'opt-' + num;
+    const ol = el('ul', { class: 'opts' }, it.opts.map((o, i) => {
+      const rec = i === it.recIdx;
+      const isPicked = formOpen ? dr.choice === o.name : it.picked.includes(i);
+      const inp = el('input', { type: 'radio', name, value: o.name, disabled: !formOpen || locked, 'data-dkey': num + ':r' + i });
+      if (isPicked) inp.checked = true;
+      inp.addEventListener('change', () => {
+        const x = drafts.get(num) || { choice: dr.choice, note: dr.note };
+        x.choice = o.name; drafts.set(num, x); dr.choice = o.name;
+        ol.querySelectorAll('.opt').forEach(l => l.classList.toggle('picked', l.dataset.name === o.name));
+      });
+      return el('li', null, el('label', { class: 'opt' + (rec ? ' rec' : '') + (isPicked ? ' picked' : '') + (!formOpen || locked ? ' locked' : ''), 'data-name': o.name, 'data-idx': String(i) }, inp,
+        el('span', null, el('span', { class: 'ol', text: o.name }), rec ? el('span', { class: 'rtag', text: '推奨' }) : null,
+          !formOpen && it.picked.includes(i) ? el('span', { class: 'ptag', text: it.pickedFrom === 'comment' ? '回答（コメントから）' : '回答' }) : null),
+        o.desc ? el('span', { class: 'od', text: o.desc }) : null));
+    }));
+    parts.push(ol);
+  } else if (formOpen) {
+    parts.push(el('p', { class: 'hint', text: '選択肢がありません。メモに答えを書いて［回答する］を押してください。' }));
+  }
+  if (it.recName && it.recIdx < 0) parts.push(el('p', { class: 'why' }, el('span', { class: 'lbl', text: '推奨' }), it.recName));
+  if (it.reason) parts.push(el('p', { class: 'why' }, el('span', { class: 'lbl', text: '推奨の理由' }), inl(it.reason.replace(/\n+/g, ' '))));
+  if (it.source) parts.push(el('p', { class: 'src' }, '出典：', inl(it.source)));
+  it.notes.forEach(t => parts.push(el('p', { class: 'src', text: t })));
+  // これまでの書き込み（新しいほうから3件。前のものは押すと出す）
+  if (it.comments.length) {
+    const all = it.comments, showAll = openHist.has(num), from = showAll ? 0 : Math.max(0, all.length - 3);
+    const hist = el('div', { class: 'hist' });
+    if (all.length > 3) {
+      const b = el('button', { class: 'more', type: 'button', 'aria-expanded': String(showAll), text: showAll ? '前の書き込みをたたむ' : `前の書き込み ${all.length - 3} 件も見る`, 'data-dkey': num + ':hist' });
+      b.addEventListener('click', () => toggleIn(openHist, num, num));
+      hist.append(b);
+    }
+    if ((showAll || all.length <= 3) && it.commentTotal > all.length) hist.append(el('p', { class: 'hint' }, `これより前の ${it.commentTotal - all.length} 件は `, el('a', { href: it.url, target: '_blank', rel: 'noopener noreferrer', text: 'GitHub で' }), '見られます。'));
+    hist.append(el('ul', { class: 'cmlist' }, all.slice(from).map((c, k) => cmItem(c, it, from + k))));
+    parts.push(hist);
+  }
+  // 送った結果・途中のエラー
+  if (oks.has(num)) parts.push(el('p', { class: 'ok', role: 'status', text: oks.get(num) }));
+  if (p && !isBusy) {
+    const stepTxt = [];
+    if (p.mode !== 'comment') stepTxt.push('本文の印 ' + (!p.choice ? '（選ばずにメモで回答）' : p.steps.body === 'done' ? '済み' : p.steps.body === 'none' ? '（印の欄なし）' : 'まだ'));
+    stepTxt.push('コメント ' + (p.steps.comment === 'done' ? '済み' : p.restored ? 'まだ（届いているかもしれません）' : 'まだ'));
+    if (p.mode !== 'comment') stepTxt.push('ラベル「回答済み」 ' + (p.steps.label === 'done' ? '済み' : 'まだ'));
+    parts.push(el('div', { class: 'partial', role: 'alert' },
+      el('span', null, p.restored ? '前にこのページを開いていたときの送信が、途中で止まっています。GitHub に書けたところ：' : '途中で止まりました。GitHub に書けたところ：'), el('span', { class: 'steps', text: stepTxt.join('／') }),
+      el('span', { text: '［続きを送る］を押すと、まだのものだけを送ります（済んだものは送り直さず、届いたか分からないコメントは先に GitHub を探します）。' })));
+  }
+  if (errs.has(num)) parts.push(el('p', { class: 'err', role: 'alert', text: errs.get(num) }));
+  // 答える欄
+  if (st === 'answered' && !editing.has(num) && !p && !cmtOnly) {
+    const b = el('button', { class: 'link', type: 'button', text: '回答を直す', 'data-dkey': num + ':fixopen' });
+    b.addEventListener('click', () => { editing.add(num); errs.delete(num); oks.delete(num); renderCard(num); });
+    const c = el('button', { class: 'link', type: 'button', text: 'コメントを書く', 'data-dkey': num + ':cmtopen', title: '選択肢は変えずに、補足や質問をコメントで送ります' });
+    c.addEventListener('click', () => {
+      commenting.add(num); errs.delete(num); oks.delete(num); renderCard(num);
+      const t = document.querySelector(`#decList [data-dkey="${num}:note"]`); if (t) t.focus();
+    });
+    parts.push(el('div', { class: 'dacts' }, b, c));
+  }
+  if (formOpen || p || cmtOnly) {
+    const mode = cmtOnly ? 'comment' : st === 'open' ? 'answer' : 'fix';
+    const ta = el('textarea', { class: 'memo', placeholder: cmtOnly ? '補足・質問など（選択肢は変えません）' : 'メモ（任意）。選択肢に無い答えや、先方の答えの書き写しもここに', 'data-dkey': num + ':note', 'aria-label': 'メモ', disabled: locked });
+    ta.value = p ? p.note : dr.note;
+    ta.addEventListener('input', () => { const x = drafts.get(num) || { choice: dr.choice, note: '' }; x.note = ta.value; dr.note = ta.value; drafts.set(num, x); });
+    ta.addEventListener('keydown', (e) => { if (e.isComposing || e.keyCode === 229) return; if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !locked) { e.preventDefault(); send(num, mode); } });
+    const acts = el('div', { class: 'dacts' });
+    if (p) {
+      const b = el('button', { class: 'send', type: 'button', text: '続きを送る', disabled: isBusy, 'data-dkey': num + ':cont' });
+      b.addEventListener('click', () => send(num, p.mode));
+      const c = el('button', { class: 'link', type: 'button', text: '送るのをやめる', disabled: isBusy, 'data-dkey': num + ':stop' });
+      c.addEventListener('click', () => { pend.delete(num); savePend(); errs.delete(num); refreshOne(num).catch(() => {}).finally(() => { renderCard(num); renderHead(); }); });
+      acts.append(b, c);
+    } else if (cmtOnly) {
+      const c = el('button', { class: 'send2', type: 'button', text: 'コメントだけ送る', disabled: isBusy, 'data-dkey': num + ':cmt', title: '選択肢は変えずに、メモだけをコメントで送ります' });
+      c.addEventListener('click', () => send(num, 'comment'));
+      const x = el('button', { class: 'link', type: 'button', text: 'やめる', disabled: isBusy, 'data-dkey': num + ':cancel' });
+      x.addEventListener('click', () => { commenting.delete(num); drafts.delete(num); errs.delete(num); renderCard(num); });
+      acts.append(c, x);
+    } else {
+      const b = el('button', { class: 'send', type: 'button', text: mode === 'answer' ? '回答する' : '回答を直す', disabled: isBusy, 'data-dkey': num + ':send' });
+      b.addEventListener('click', () => send(num, mode));
+      const c = el('button', { class: 'send2', type: 'button', text: 'コメントだけ送る', disabled: isBusy, 'data-dkey': num + ':cmt', title: '選択肢は変えずに、メモだけをコメントで送ります' });
+      c.addEventListener('click', () => send(num, 'comment'));
+      acts.append(b, c);
+      if (editing.has(num)) { const x = el('button', { class: 'link', type: 'button', text: 'やめる', disabled: isBusy, 'data-dkey': num + ':cancel' }); x.addEventListener('click', () => { editing.delete(num); drafts.delete(num); errs.delete(num); renderCard(num); }); acts.append(x); }
+    }
+    if (isBusy) acts.append(el('span', { class: 'prog', role: 'status', text: '送っています… ' + busy.get(num) }));
+    parts.push(ta, acts);
+  }
+  return el('article', { class: 'dcard st-' + st + (it.who === '先方' ? ' w-client' : ''), id: 'd-' + num, 'data-num': String(num), 'data-state': st, 'data-sig': sig(it) }, parts);
+}
+
+// ---- 答える（本文の [x] → コメント → ラベル → 読み直し）。途中で止まったら、済んだところを覚えて二重に送らない ----
+// 済んだところ・送っている途中のものは、このブラウザにも残す（ページを開き直しても［続きを送る］を出し、届いたか分からないコメントは先に探す）
+// 送っている間に描き直すのは、そのカードと上の件数だけ（ほかのカードで書いているメモには触らない）
+async function send(num, mode) {
+  if (busy.has(num)) return;
+  const it = issues.find(x => x.number === num);
+  if (!it) return;
+  errs.delete(num); oks.delete(num);
+  let p = pend.get(num);
+  if (!p) {
+    const dr = drafts.get(num) || { choice: it.picked.length ? it.opts[it.picked[0]].name : '', note: '' };
+    const choice = mode === 'comment' ? '' : s(dr.choice);
+    const note = s(dr.note).trim();
+    if (mode === 'comment' && !note) { errs.set(num, 'メモを書いてから［コメントだけ送る］を押してください。'); renderCard(num); return; }
+    // 選択肢に無い答えは、選ばずにメモだけで［回答する］ができる（回答済みになる）。両方空のときだけ止める
+    if (mode !== 'comment' && it.opts.length && !choice && !note) { errs.set(num, '選択肢を選ぶか、メモに答えを書いてください（回答にしないで書き込むときは［コメントだけ送る］）。'); renderCard(num); return; }
+    if (mode !== 'comment' && !it.opts.length && !note) { errs.set(num, '選択肢が無いので、メモに答えを書いてください。'); renderCard(num); return; }
+    const head = mode === 'comment' ? 'コメント' : mode === 'fix' ? '回答を直した' : '回答';
+    const commentText = `**${head}**（ボード・${nowStamp()}）` + (choice ? '：' + choice : '') + (note ? '\n\n' + note : '');
+    p = { mode, choice, note, commentText, startedAt: new Date(Date.now() - 120000).toISOString(), steps: { body: '', comment: '', label: '' }, tries: 0, inflight: '', unsure: false };
+    pend.set(num, p);
+    savePend();
+  }
+  p.tries++;
+  const stage = (t) => { busy.set(num, t); renderCard(num); };
+  const fly = (k) => { p.inflight = k; savePend(); };
+  const done = (k, v) => { p.inflight = ''; p.steps[k] = v || 'done'; savePend(); };
+  const url = issueUrl(num);
+  try {
+    stage('（本文を読み直しています）');
+    const cur = await call('GET', url, undefined, false);
+    if (s(cur.state) === 'closed') throw new GhErr('gone', 'この判断待ちは、ほかで閉じられていました（対応済）。読み直したので、確かめてください。', 0);
+    const labelsNow = (cur.labels || []).map(l => (typeof l === 'string' ? l : s(l.name)));
+    if (p.mode !== 'comment' && p.choice && p.steps.body !== 'done' && p.steps.body !== 'none') {
+      const r = setChecks(s(cur.body), p.choice);
+      if (!r.hasSection || !r.boxes) done('body', 'none');
+      else if (!r.found) throw new GhErr('changed', `本文の選択肢がほかで直されていて、「${p.choice}」が見つかりませんでした。読み直したので、選び直してください。`, 0);
+      else if (r.body === s(cur.body)) done('body');
+      else { stage('（本文の選択肢に印を付けています）'); fly('body'); await call('PATCH', url, { body: r.body }, true); done('body'); }
+    }
+    if (p.steps.comment !== 'done') {
+      if (p.unsure) {
+        // 前の送信で、届いたのに返事だけ落ちたかもしれない（またはページを閉じた）。同じコメントがもうあれば送らない
+        stage('（前に送ったコメントを探しています）');
+        const list = await call('GET', `${url}/comments?since=${encodeURIComponent(p.startedAt)}&per_page=100`, undefined, false);
+        if ((list || []).some(c => norm(c.body) === norm(p.commentText))) done('comment');
+        p.unsure = false;
+      }
+      if (p.steps.comment !== 'done') { stage('（コメントを書いています）'); fly('comment'); await call('POST', url + '/comments', { body: p.commentText }, true); done('comment'); }
+    }
+    if (p.mode !== 'comment' && p.steps.label !== 'done') {
+      if (labelsNow.includes(ANSWERED)) done('label');
+      else { stage('（ラベル「回答済み」を付けています）'); fly('label'); await call('POST', url + '/labels', { labels: [ANSWERED] }, true); done('label'); }
+    }
+    pend.delete(num); savePend();
+    drafts.delete(num); editing.delete(num); commenting.delete(num); keep.add(num);
+    const fin = p.mode === 'comment' ? 'コメントを送りました。' : (p.mode === 'fix' ? '回答を直しました。' : '回答しました。') + (p.steps.body === 'none' ? '（本文に印を付ける欄が無いので、コメントとラベルだけ書きました）' : '');
+    oks.set(num, fin + 'Claude が読んで対応します。');
+    stage('（カードを読み直しています）');
+    try { await refreshOne(num); } catch (e) { errs.set(num, '書き込みは済みました。カードの読み直しに失敗したので、上の［読み直す］を押してください。'); }
+  } catch (e) {
+    const err = e instanceof GhErr ? e : new GhErr('other', '送れませんでした。', 0);
+    // 書き込みの途中でつながりが切れたときは、届いたかどうか分からない（次は先に探してから送る）
+    if (err.kind === 'net' && p.inflight) { if (p.inflight === 'comment') p.unsure = true; }
+    else if (p.inflight === 'comment') p.unsure = false;
+    const ambiguous = err.kind === 'net' && !!p.inflight;
+    p.inflight = '';
+    const wrote = p.steps.body === 'done' || p.steps.comment === 'done' || p.steps.label === 'done';
+    if (!wrote && !ambiguous && !p.unsure) pend.delete(num);   // まだ何も書けていない（届いたか分からないコメントも無い）：選び直して送れる形に戻す
+    if (err.kind === 'gone') pend.delete(num);    // ほかで閉じられたものには続きを送らない
+    savePend();
+    keep.add(num);
+    if (err.kind === 'changed' || err.kind === 'gone') {
+      if (err.kind === 'changed') { drafts.delete(num); pend.delete(num); savePend(); }
+      errs.set(num, err.message);
+      try { await refreshOne(num); } catch (e2) {}
+    } else {
+      errs.set(num, err.message + (ambiguous ? '\n送ったものが GitHub に届いたかどうか分かりません。［続きを送る］を押すと、届いていればそれを使い、二重には送りません。' : '') + (err.kind === 'auth' ? '\n右上の［トークンを消す］を押して、作り直したトークンを貼ってください。' : ''));
+    }
+  } finally {
+    busy.delete(num);
+    renderCard(num);
+    renderHead();
+  }
+}
+
+// ---- つなぐ ----
+document.getElementById('fArea').addEventListener('change', (e) => { f.area = e.target.value; keep.clear(); saveF(); render(); });
+document.getElementById('fHot').addEventListener('change', (e) => { f.hot = e.target.checked; keep.clear(); saveF(); render(); });
+let tTimer = 0;
+document.getElementById('fText').addEventListener('input', (e) => { clearTimeout(tTimer); tTimer = setTimeout(() => { f.text = e.target.value; render(); }, 150); });
+document.getElementById('btnReload').addEventListener('click', () => { keep.clear(); oks.clear(); reload(); });
+document.getElementById('btnForget').addEventListener('click', () => {
+  if (!confirm('このブラウザに保存したトークンを消します。次に開いたときに、貼り直しが要ります。')) return;
+  forgetToken(); issues = []; document.getElementById('decList').replaceChildren(); showBanner(''); showSetup('');
+});
+function saveFromInput() {
+  const inp = document.getElementById('tokIn');
+  const t = inp.value.trim();
+  inp.value = '';
+  const e = document.getElementById('setupErr');
+  if (!t) { e.hidden = false; e.textContent = 'トークンを貼ってください。'; return; }
+  if (!/^[\x21-\x7e]+$/.test(t)) { e.hidden = false; e.textContent = '貼った文字に、トークン以外のもの（空白や日本語など）が混ざっています。コピーし直して貼ってください。'; return; }
+  const stored = saveToken(t);
+  e.hidden = true;
+  if (!stored) showBanner('このブラウザではトークンを保存できないので、開くたびに貼り直しが要ります。');
+  reload();
+}
+document.getElementById('tokSave').addEventListener('click', saveFromInput);
+document.getElementById('tokIn').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); saveFromInput(); } });
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && getToken() && issues.length && Date.now() - lastLoad > 5 * 60 * 1000 && !busy.size) reload();
+});
+// 日本語の変換の途中は一覧を描き直さない（終わってから描く）。古い中身のまま残したカードは、フォーカスが離れたら描き直す
+const afterCompose = () => setTimeout(() => { if (composing) return; if (wantRender) render(); flushStale(); }, 0);
+document.addEventListener('compositionstart', () => { composing = true; }, true);
+document.addEventListener('compositionend', () => { composing = false; afterCompose(); }, true);
+document.addEventListener('focusout', (e) => { if (composing && e.target && e.target.matches && e.target.matches('textarea, input')) { composing = false; afterCompose(); } }, true);
+document.addEventListener('click', () => setTimeout(flushStale, 0));
+document.addEventListener('keyup', (e) => { if (e.key === 'Tab' || e.key === 'Escape') setTimeout(flushStale, 0); });
+// 名前は設定（CFG）から出す。トークンの名前は日付を付けて、PC とスマホで別に作っても重ならないようにする
+document.title = CFG.title;
+document.getElementById('hTitle').textContent = CFG.title;
+document.querySelectorAll('.repoName').forEach(n => { n.textContent = REPO; });
+{
+  const a = document.getElementById('footRepo');
+  a.href = `https://github.com/${OWNER}/${REPO}/issues?q=label%3A${encodeURIComponent(LABEL)}`;
+  a.textContent = `${OWNER}/${REPO} の判断待ち`;
+  const t = document.getElementById('tokNewLink'), u = new URL(t.href), d = new Date();
+  u.searchParams.set('name', `判断待ちボード ${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}`);
+  t.href = u.toString();
+}
+if (!REPO) { setLive('bad', 'リポジトリ名がありません'); showBanner('このページの URL の最後に「#リポジトリ名」を付けて開いてください。'); }
+else if (getToken()) reload(); else showSetup('');
+</script>
+</body>
+</html>

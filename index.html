@@ -125,6 +125,8 @@ h1 { font-family: var(--f-head); font-size: 24px; margin: 0; text-wrap: balance;
 .tag { border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; color: var(--muted); }
 .tag.hot { border-color: var(--client); color: var(--client); font-weight: 700; }
 .tag.fb { border-color: var(--accent); color: var(--accent); }
+.tag.prod { border-color: var(--decide); color: var(--decide); font-weight: 700; }
+.prodbox { display: grid; gap: 6px; border: 1px dashed var(--decide); border-radius: 6px; padding: 8px 10px; }
 .gh { margin-left: auto; font-size: 12px; color: var(--accent); white-space: nowrap; }
 .q { font-weight: 700; font-size: 15px; margin: 0; white-space: pre-line; overflow-wrap: anywhere; }
 .ctx { font-size: 13px; color: var(--muted); display: grid; gap: 4px; }
@@ -250,6 +252,7 @@ textarea:focus-visible, select:focus-visible, input:focus-visible, .md a:focus-v
       <div class="fg"><label class="fl" for="fArea">分野</label><select id="fArea"></select></div>
       <div class="fg"><label class="ck"><input type="checkbox" id="fHot">急ぎだけ</label></div>
       <div class="fg"><label class="ck"><input type="checkbox" id="fQa">QA（テストの指摘）に関係するものだけ</label></div>
+      <div class="fg"><label class="ck"><input type="checkbox" id="fProd">本番の承認待ちだけ</label></div>
       <div class="fg search"><label class="fl" for="fText">文字で探す</label><input type="search" id="fText" placeholder="D-12、承認者 など"></div>
     </div>
     <p class="shown" id="shown"></p>
@@ -267,6 +270,10 @@ const OWNER = CFG.owner, REPO = CFG.repo;
 const LABEL = '判断待ち', ANSWERED = '回答済み';
 // QA の絞り込み：テストの指摘そのもの（ラベル「テストの指摘」）と、指摘を閉じる・テストを進めるのに答えが要る判断待ち（ラベル「QA」。2026/10/23 髙山「QAのやつを優先的に対応したい」）
 const FB_LABEL = 'テストの指摘', QA_LABEL = 'QA';
+// 本番の承認待ち：サンドで確かめ終わり、本番に入れるのに髙山の承認だけを待っているもの（2026/10/27 髙山「それでお願いします」）。本番に入れたら外す
+const PROD_LABEL = '本番の承認待ち';
+// 本番OK：本番の承認待ちのカードの［本番に入れてよい］で付ける（2026/10/27 髙山「本番待ちOKだったらボタンで知らせできるように」）。Claude が本番に入れたら、2つとも外す
+const PROD_OK_LABEL = '本番OK';
 const API = 'https://api.github.com';
 const TOKEN_KEY = CFG.key + '.ghToken';
 const FILTER_KEY = CFG.key + '.filter';
@@ -489,7 +496,7 @@ function parseIssue(n) {
   const question = pre.question || s(n.title).replace(/^D-\d+\s*/, '');
   return {
     number: n.number, title: s(n.title), url: s(n.url), state, labels, who, area, priority,
-    fb: labels.includes(FB_LABEL), qa: labels.includes(QA_LABEL), fbState: labels.find(l => FB_STATES.includes(l)) || '',
+    fb: labels.includes(FB_LABEL), qa: labels.includes(QA_LABEL), prod: labels.includes(PROD_LABEL), prodOk: labels.includes(PROD_OK_LABEL), fbState: labels.find(l => FB_STATES.includes(l)) || '',
     key: km ? 'D-' + km[1] : '#' + n.number, related: s(t['関係する項目']),
     question, bg, opts: opts.list, optsIntro: opts.intro, hasOptSection: optText != null,
     canMark: opts.list.some(o => o.kind === 'check'),
@@ -581,10 +588,10 @@ const plainLen = (t) => s(t).replace(/[*`#|>-]/g, '').replace(/\s+/g, '').length
 // ---- 状態 ----
 let issues = [];
 let lastLoad = 0, loading = false;
-const f = { who: 'all', state: 'open', area: 'all', hot: false, qa: false, text: '' };
+const f = { who: 'all', state: 'open', area: 'all', hot: false, qa: false, prod: false, text: '' };
 try { Object.assign(f, JSON.parse(localStorage.getItem(FILTER_KEY) || '{}')); } catch (e) {}
 f.text = '';
-const saveF = () => { try { localStorage.setItem(FILTER_KEY, JSON.stringify({ who: f.who, state: f.state, area: f.area, hot: f.hot, qa: f.qa })); } catch (e) {} };
+const saveF = () => { try { localStorage.setItem(FILTER_KEY, JSON.stringify({ who: f.who, state: f.state, area: f.area, hot: f.hot, qa: f.qa, prod: f.prod })); } catch (e) {} };
 const drafts = new Map();    // 書きかけ（番号 → {choice, note}）。描き直しても消さない
 const editing = new Set();   // 回答済みを［回答を直す］で開いているもの
 const openBg = new Set(), openHist = new Set(), openCm = new Set();
@@ -594,6 +601,7 @@ const errs = new Map();      // カードごとのエラー
 const oks = new Map();       // カードごとの「送りました」
 const keep = new Set();      // 答えた直後のものは、状態の絞り込みから外れても今の一覧に残す
 const commenting = new Set(); // 回答済みのカードで［コメントを書く］を開いているもの
+const pnotes = new Map();     // ［本番に入れてよい］のメモの書きかけ（番号 → 文字）
 const stale = new Set();     // 書いている途中で一覧を描き直したため、古い中身のまま残しているカード（その欄を離れたら描き直す）
 let composing = false;       // 日本語の変換の途中（この間は描き直さない）
 let wantRender = false;
@@ -784,7 +792,7 @@ function matchText(it) {
   // 「D-15」「#15」は番号ちょうどのものだけ（D-152 などに当たらないように）。ほかは本文・コメント・ラベルの中を探す
   return q.split(/\s+/).every(w => { const m = /^(?:d-|#)0*(\d+)$/.exec(w); return m ? it.number === +m[1] : it.hay.includes(w); });
 }
-const baseList = () => issues.filter(d => (f.area === 'all' || d.area === f.area) && (!f.hot || d.priority === '急ぎ') && (!f.qa || d.fb || d.qa) && matchText(d));
+const baseList = () => issues.filter(d => (f.area === 'all' || d.area === f.area) && (!f.hot || d.priority === '急ぎ') && (!f.qa || d.fb || d.qa) && (!f.prod || d.prod) && matchText(d));
 const byWho = (arr, w) => arr.filter(d => w === 'all' || d.who === w);
 const whoList = () => ['髙山', '先方', ...[...new Set(issues.map(d => d.who).filter(w => w && w !== '髙山' && w !== '先方'))].sort()];
 const areaList = () => [...new Set(issues.map(d => d.area).filter(Boolean))].sort((a, b) => (AREAS.indexOf(a) + 1 || 99) - (AREAS.indexOf(b) + 1 || 99) || a.localeCompare(b, 'ja'));
@@ -803,6 +811,7 @@ function renderHead() {
   sel.value = f.area;
   document.getElementById('fHot').checked = !!f.hot;
   document.getElementById('fQa').checked = !!f.qa;
+  document.getElementById('fProd').checked = !!f.prod;
   const open = issues.filter(d => d.state === 'open');
   const cnt = document.getElementById('decCount');
   cnt.replaceChildren(
@@ -887,6 +896,7 @@ function dcard(it) {
     it.area ? el('span', { class: 'tag', text: it.area }) : null,
     it.fb ? el('span', { class: 'tag fb', text: 'テストの指摘' + (it.fbState ? '・' + it.fbState : '') }) : null,
     it.qa && !it.fb ? el('span', { class: 'tag fb', text: 'QA の前提' }) : null,
+    it.prod ? el('span', { class: 'tag prod', text: it.prodOk ? '本番OK（入れる待ち）' : '本番の承認待ち' }) : null,
     el('span', { class: 'key', text: it.key }),
     it.related ? el('span', { class: 'tag', text: '項目 ' + it.related }) : null,
     /^https:\/\/github\.com\//.test(it.url) ? el('a', { class: 'gh', href: it.url, target: '_blank', rel: 'noopener noreferrer', text: 'GitHub で開く' }) : null);
@@ -949,6 +959,25 @@ function dcard(it) {
       el('span', { text: '［続きを送る］を押すと、まだのものだけを送ります（済んだものは送り直さず、届いたか分からないコメントは先に GitHub を探します）。' })));
   }
   if (errs.has(num)) parts.push(el('p', { class: 'err', role: 'alert', text: errs.get(num) }));
+  // 本番の承認（本番の承認待ちのカードだけ）。押すとコメント「**本番OK**（ボード・…）」とラベル「本番OK」を付ける。入れるのは Claude
+  if (it.prod && st !== 'done' && !p) {
+    const box = el('div', { class: 'prodbox' });
+    const prog = isBusy ? el('span', { class: 'prog', role: 'status', text: '送っています… ' + busy.get(num) }) : null;
+    if (!it.prodOk) {
+      box.append(el('p', { class: 'hint', text: '本番に入れてよければ［本番に入れてよい］を押してください。コメント「本番OK」とラベル「本番OK」が付き、Claude が手順書の承認の1行を出してから入れます（入れるときに Claude Code の画面でもう一度確かめが出ます）。' }));
+      const ta = el('textarea', { class: 'memo', placeholder: 'メモ（任意）。入れる日時の指定や、一部だけ入れるときはここに', 'data-dkey': num + ':pnote', 'aria-label': '本番に入れるときのメモ', disabled: isBusy });
+      ta.value = pnotes.get(num) || '';
+      ta.addEventListener('input', () => { pnotes.set(num, ta.value); });
+      const b = el('button', { class: 'send', type: 'button', text: '本番に入れてよい', disabled: isBusy, 'data-dkey': num + ':prodok' });
+      b.addEventListener('click', () => sendProd(num, false));
+      box.append(ta, el('div', { class: 'dacts' }, b, prog));
+    } else {
+      const x = el('button', { class: 'link', type: 'button', text: '本番OK を取り消す', disabled: isBusy, 'data-dkey': num + ':prodcancel' });
+      x.addEventListener('click', () => { if (confirm('本番OK を取り消します（コメントを書き、ラベル「本番OK」を外します）。')) sendProd(num, true); });
+      box.append(el('div', { class: 'dacts' }, el('span', { class: 'hint', text: '本番OK を送りました。Claude が本番に入れたら、ラベルは外れます。' }), x, prog));
+    }
+    parts.push(box);
+  }
   // 答える欄
   if (st === 'answered' && !editing.has(num) && !p && !cmtOnly) {
     const b = el('button', { class: 'link', type: 'button', text: '回答を直す', 'data-dkey': num + ':fixopen' });
@@ -1079,10 +1108,59 @@ async function send(num, mode) {
   }
 }
 
+// ---- 本番の承認（［本番に入れてよい］・［本番OK を取り消す］）。読み直し → コメント → ラベル。二重に付けないよう、先に今のラベルを見る ----
+async function sendProd(num, cancel) {
+  if (busy.has(num)) return;
+  const it = issues.find(x => x.number === num);
+  if (!it) return;
+  errs.delete(num); oks.delete(num);
+  const note = cancel ? '' : s(pnotes.get(num) || '').trim();
+  const url = issueUrl(num);
+  const stage = (t) => { busy.set(num, t); renderCard(num); };
+  let wrote = false;
+  try {
+    stage('（読み直しています）');
+    const cur = await call('GET', url, undefined, false);
+    if (s(cur.state) === 'closed') throw new GhErr('gone', 'この Issue は、ほかで閉じられていました。読み直したので、確かめてください。', 0);
+    const labelsNow = (cur.labels || []).map(l => (typeof l === 'string' ? l : s(l.name)));
+    if (!cancel && !labelsNow.includes(PROD_LABEL)) throw new GhErr('changed', '「本番の承認待ち」のラベルが外れていました（もう本番に入れたか、取り下げたものです）。読み直したので、確かめてください。', 0);
+    if (cancel ? !labelsNow.includes(PROD_OK_LABEL) : labelsNow.includes(PROD_OK_LABEL)) {
+      oks.set(num, cancel ? '本番OK は付いていませんでした（ほかで取り消し済み）。' : '本番OK はもう付いていました（二重には送っていません）。');
+    } else {
+      const head = cancel ? '本番OKを取り消した' : '本番OK';
+      const text = '**' + head + '**（ボード・' + nowStamp() + '）' + (note ? '\n\n' + note : '');
+      stage('（コメントを書いています）');
+      await call('POST', url + '/comments', { body: text }, true);
+      wrote = true;
+      if (cancel) { stage('（ラベル「本番OK」を外しています）'); await call('DELETE', url + '/labels/' + encodeURIComponent(PROD_OK_LABEL), undefined, true); }
+      else { stage('（ラベル「本番OK」を付けています）'); await call('POST', url + '/labels', { labels: [PROD_OK_LABEL] }, true); }
+      pnotes.delete(num);
+      oks.set(num, cancel ? '本番OK を取り消しました。' : '本番OK を送りました。Claude が承認の1行を出してから本番に入れます。');
+    }
+    keep.add(num);
+    stage('（カードを読み直しています）');
+    try { await refreshOne(num); } catch (e) { errs.set(num, '書き込みは済みました。カードの読み直しに失敗したので、上の［読み直す］を押してください。'); }
+  } catch (e) {
+    const err = e instanceof GhErr ? e : new GhErr('other', '送れませんでした。', 0);
+    keep.add(num);
+    errs.set(num, err.message
+      + (wrote ? '\nコメントは書けました。ラベルがまだなら、押し直さずに上の［読み直す］で確かめてください（押し直すとコメントが2つになります）。' : '')
+      + (err.kind === 'net' && !wrote ? '\n届いたかどうか分からないので、上の［読み直す］で確かめてから押し直してください。' : '')
+      + (err.kind === 'auth' ? '\n右上の［トークンを消す］を押して、作り直したトークンを貼ってください。' : ''));
+    try { await refreshOne(num); } catch (e2) {}
+  } finally {
+    busy.delete(num);
+    renderCard(num);
+    renderHead();
+  }
+}
+
 // ---- つなぐ ----
 document.getElementById('fArea').addEventListener('change', (e) => { f.area = e.target.value; keep.clear(); saveF(); render(); });
 document.getElementById('fHot').addEventListener('change', (e) => { f.hot = e.target.checked; keep.clear(); saveF(); render(); });
 document.getElementById('fQa').addEventListener('change', (e) => { f.qa = e.target.checked; keep.clear(); saveF(); render(); });
+// 本番の承認待ちは回答済みのものなので、「未回答」のまま入れたら「すべて」に替える（0件に見えないように）
+document.getElementById('fProd').addEventListener('change', (e) => { f.prod = e.target.checked; if (f.prod && f.state === 'open') f.state = 'all'; keep.clear(); saveF(); render(); });
 let tTimer = 0;
 document.getElementById('fText').addEventListener('input', (e) => { clearTimeout(tTimer); tTimer = setTimeout(() => { f.text = e.target.value; render(); }, 150); });
 document.getElementById('btnReload').addEventListener('click', () => { keep.clear(); oks.clear(); reload(); });
